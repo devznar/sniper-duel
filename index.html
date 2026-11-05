@@ -89,7 +89,11 @@ tr.me td{background:rgba(245,158,11,.08)}
 #grid,#grid .pane canvas{cursor:none}
 #grid .pane:not(.me){pointer-events:none}
 /* results */
-#results{position:fixed;inset:0;background:rgba(3,5,8,.84);display:flex;align-items:center;justify-content:center;z-index:50;backdrop-filter:blur(3px)}
+#results,#soloIntro{position:fixed;inset:0;background:rgba(3,5,8,.84);display:flex;align-items:center;justify-content:center;z-index:50;backdrop-filter:blur(3px)}
+#soloIntro .modal.intro{width:min(480px,92vw)}
+.howto{display:flex;flex-direction:column;gap:12px}
+.hrow{display:flex;gap:14px;align-items:center;background:#0d131b;border:1px solid var(--line);border-radius:12px;padding:12px 14px;line-height:1.5}
+.hrow .key{flex:none;min-width:92px;text-align:center;font-weight:800;color:var(--acc);background:#1a1408;border:1px solid #5c4410;border-radius:8px;padding:8px 6px}
 .modal{width:min(1000px,94vw);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px}
 .modal h2{margin:0 0 4px;font-size:26px}
 .modal h3{margin:22px 0 10px;font-size:15px;color:var(--mute);letter-spacing:1px}
@@ -134,6 +138,7 @@ tr.me td{background:rgba(245,158,11,.08)}
           <div style="margin-top:16px"><button class="btn pri big" id="btnHost">방 만들기 (호스트)</button></div>
           <label class="f" for="codeIn">방 참가</label>
           <div class="row"><input id="codeIn" type="text" maxlength="5" placeholder="방 코드 5자리" style="flex:1;text-transform:uppercase;letter-spacing:5px;min-width:0"><button class="btn blue" id="btnJoin">참가</button></div>
+          <div style="margin-top:14px"><button class="btn big" id="btnSolo">🎯 혼자 연습하기 (1분)</button></div>
           <div class="msg" id="menuMsg"></div>
         </div>
         <div class="card hidden" id="roomsCard">
@@ -204,6 +209,21 @@ tr.me td{background:rgba(245,158,11,.08)}
 <div id="ending" class="hidden">
   <canvas id="endCanvas"></canvas>
   <div id="endBtns"><button class="btn pri" id="btnEndSkip">결과 보기 ▶</button></div>
+</div>
+
+<!-- ============ SOLO INTRO POPUP ============ -->
+<div id="soloIntro" class="hidden" role="dialog" aria-modal="true" aria-labelledby="soloIntroTitle">
+  <div class="modal intro">
+    <h2 id="soloIntroTitle">🎯 혼자 연습하기</h2>
+    <p class="mute" style="margin:4px 0 16px">시작하기 전에 조작법을 확인하세요.</p>
+    <div class="howto">
+      <div class="hrow"><span class="key">🖱 우클릭</span><div><b>저격 조준 (스코프)</b><br><span class="mute">한 번: 2.5배 확대 · 두 번: 5배 확대 · 세 번: 해제</span></div></div>
+      <div class="hrow"><span class="key">🖱 좌클릭</span><div><b>발사</b><br><span class="mute">스코프로 조준한 뒤 쏘면 정확하게 맞습니다</span></div></div>
+      <div class="hrow"><span class="key">⏱ 1분</span><div><b>제한 시간 동안 최대한 많이 맞히세요</b><br><span class="mute">빠른 표적일수록 점수가 높고, 머리를 맞히면 1.5배!</span></div></div>
+    </div>
+    <p class="mute" style="font-size:13px;margin:14px 0 0">게임 화면을 처음 클릭하면 마우스가 화면에 고정됩니다 (Esc: 해제)</p>
+    <div class="row" style="margin-top:18px;justify-content:flex-end"><button class="btn" id="btnSoloCancel">취소</button><button class="btn pri" id="btnSoloOk" style="min-width:120px">확인</button></div>
+  </div>
 </div>
 
 <!-- ============ RESULTS ============ -->
@@ -1341,6 +1361,13 @@ function init(){
   const nameIn=$('#nameIn');nameIn.value=settings.name;
   nameIn.addEventListener('input',()=>{settings.name=nameIn.value.slice(0,12);saveSettings()});
   $('#btnHost').onclick=()=>{ac();createRoom()};
+  // 혼자 연습: 조작법 팝업 → [확인]을 눌러야 게임 시작
+  const intro=$('#soloIntro'),closeIntro=()=>intro.classList.add('hidden');
+  $('#btnSolo').onclick=()=>{ac();intro.classList.remove('hidden');$('#btnSoloOk').focus()};
+  $('#btnSoloOk').onclick=()=>{closeIntro();startSolo()};
+  $('#btnSoloCancel').onclick=closeIntro;
+  intro.addEventListener('click',e=>{if(e.target===intro)closeIntro()});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!intro.classList.contains('hidden'))closeIntro()});
   $('#btnJoin').onclick=()=>{ac();joinRoom()};
   $('#codeIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('#btnJoin').click()});
   $$('[data-board]').forEach(box=>box.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{boardTab[box.dataset.board]=b.dataset.tab;renderBoard(box.dataset.board)}));
