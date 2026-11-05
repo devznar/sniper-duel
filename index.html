@@ -120,7 +120,7 @@ tr.me td{background:rgba(245,158,11,.08)}
 <!-- ============ MENU ============ -->
 <section id="menu" class="screen">
   <div class="wrap">
-    <div class="brand"><h1>SNIPER<span>DUEL</span></h1><p>저격 에임 트레이너 · 실시간 1~4인 대결</p></div>
+    <div class="brand"><h1>SNIPER<span>DUEL</span></h1><p>실시간 2~4인 저격 대결 · 1분</p></div>
     <div id="inviteBanner" class="banner hidden">
       <div class="bt">방 <b id="bannerCode"></b> 에 초대되었습니다 — 닉네임을 입력하고 [바로 참가]</div>
       <button class="btn pri" id="btnQuickJoin">바로 참가</button>
@@ -134,41 +134,16 @@ tr.me td{background:rgba(245,158,11,.08)}
           <div style="margin-top:16px"><button class="btn pri big" id="btnHost">방 만들기 (호스트)</button></div>
           <label class="f" for="codeIn">방 참가</label>
           <div class="row"><input id="codeIn" type="text" maxlength="5" placeholder="방 코드 5자리" style="flex:1;text-transform:uppercase;letter-spacing:5px;min-width:0"><button class="btn blue" id="btnJoin">참가</button></div>
-          <label class="f">혼자 연습</label>
-          <div class="row"><button class="btn" data-solo="60">1분</button><button class="btn" data-solo="120">2분</button><button class="btn" data-solo="180">3분</button><button class="btn pri" id="btnSolo" style="flex:1">솔로 연습 시작</button></div>
-          <div style="margin-top:14px"><button class="btn" id="btnDl" style="width:100%">⬇ 게임 파일(HTML) 다운로드 — 친구에게 전달용</button></div>
           <div class="msg" id="menuMsg"></div>
         </div>
         <div class="card hidden" id="roomsCard">
           <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">🌐 지금 열린 방</h2><span class="mute" id="roomsStatus" style="font-size:13px"></span></div>
           <div id="roomList"></div>
         </div>
-        <div class="card">
-          <h2>설정</h2>
-          <label class="f">마우스 감도 (일반)</label>
-          <div class="slider"><input type="range" id="sens" min="0.2" max="3" step="0.05"><output id="sensO"></output></div>
-          <label class="f">마우스 감도 (스코프 배율)</label>
-          <div class="slider"><input type="range" id="ssens" min="0.3" max="1.5" step="0.05"><output id="ssensO"></output></div>
-          <label class="chk"><input type="checkbox" id="auto"> 발사 후 자동 줌 해제 (실전 저격총 방식)</label>
-          <label class="chk"><input type="checkbox" id="sound"> 효과음</label>
-        </div>
       </div>
       <div>
         <div class="card">
-          <h2>점수 규칙 · 대상 속도별</h2>
-          <div class="tiers" id="tierBox"></div>
-          <ul class="rules">
-            <li><kbd>우클릭</kbd> 스코프 조준 (1회: 2.5배 → 2회: 5배 → 3회: 해제), <kbd>휠</kbd>로 배율 변경</li>
-            <li><kbd>좌클릭</kbd> 발사 · 볼트액션 재장전 0.9초</li>
-            <li>노스코프 사격은 탄이 크게 퍼집니다 (점선 원 범위). 스코프 안에서는 미세한 흔들림이 있습니다.</li>
-            <li><b>헤드샷 ×1.5</b>, 연속 명중 시 1회당 +10% (최대 +50%), 빗나가면 연속 초기화</li>
-            <li>멀티플레이: 모든 참가자에게 <b>같은 대상</b>이 같은 타이밍에 등장합니다. 방장이 1분 / 2분 / 3분 중 진행 시간을 선택합니다.</li>
-            <li>게임 화면을 클릭하면 마우스가 <b>내 화면 칸에 고정</b>되어 다른 사람 화면으로 넘어가지 않습니다. <kbd>Esc</kbd>로 해제.</li>
-          </ul>
-        </div>
-        <div class="card">
-          <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">랭킹</h2>
-            <div class="row"><div class="tabs srcTabs hidden" style="margin:0"><button class="btn sm" data-src="global">🌐 전체 (온라인)</button><button class="btn sm" data-src="local">이 PC</button></div><button class="btn sm" id="btnReset">기록 초기화</button></div></div>
+          <h2 style="margin-bottom:10px">🏆 랭킹</h2>
           <div class="tabs" data-board="boardMenu"><button class="btn sm sel" data-tab="total">누적 총점</button><button class="btn sm" data-tab="best">최고 점수</button></div>
           <div id="boardMenu" class="tblwrap"></div>
         </div>
@@ -184,7 +159,7 @@ tr.me td{background:rgba(245,158,11,.08)}
     <div class="card">
       <div class="row" style="justify-content:space-between">
         <div><div class="lbl">방 코드</div><div id="lobbyCode" class="code">-----</div></div>
-        <div class="row"><button class="btn" id="btnCopy">코드 복사</button><button class="btn" id="btnDl2">⬇ 게임 파일 다운로드</button><button class="btn" id="btnLeave">나가기</button></div>
+        <div class="row"><button class="btn" id="btnCopy">코드 복사</button><button class="btn" id="btnLeave">나가기</button></div>
       </div>
       <div class="msg" id="lobbyMsg"></div>
       <div id="invite" class="invite hidden">
@@ -206,7 +181,7 @@ tr.me td{background:rgba(245,158,11,.08)}
       <div class="row"><span class="mute" style="width:70px">화면</span><button class="btn" data-view="split">▦ 분할 화면</button><button class="btn" data-view="shared">▣ 하나의 화면 공유</button></div>
       <div class="mute" id="viewDesc" style="font-size:13px;margin:6px 0 10px 78px"></div>
       <div class="row"><span class="mute" style="width:70px">인원</span><button class="btn" data-mode="2">2인 (2분할)</button><button class="btn" data-mode="3">3인 (3분할)</button><button class="btn" data-mode="4">4인 (4분할)</button></div>
-      <div class="row" style="margin-top:10px"><span class="mute" style="width:70px">시간</span><button class="btn" data-dur="60">1분</button><button class="btn" data-dur="120">2분</button><button class="btn" data-dur="180">3분</button></div>
+      <div class="row" style="margin-top:10px"><span class="mute" style="width:70px">시간</span><b style="color:var(--acc)">1분</b><span class="mute" style="font-size:13px">(모든 경기 1분 고정)</span></div>
       <div class="row" style="margin-top:10px"><span class="mute" style="width:70px">봇 추가</span><button class="btn" data-bot="easy">+ 쉬움</button><button class="btn" data-bot="normal">+ 보통</button><button class="btn" data-bot="hard">+ 어려움</button></div>
       <div style="margin-top:16px"><button class="btn pri big" id="btnStart">게임 시작</button></div>
       <div class="msg" id="startHint"></div>
@@ -220,7 +195,6 @@ tr.me td{background:rgba(245,158,11,.08)}
   <div id="topbar">
     <div id="timer">03:00</div>
     <div id="ranks"></div>
-    <button class="btn sm" id="btnSound">소리</button>
     <button class="btn sm" id="btnQuit">나가기</button>
   </div>
   <div id="grid"></div>
@@ -239,7 +213,6 @@ tr.me td{background:rgba(245,158,11,.08)}
     <div class="winner" id="resWinner"></div>
     <div id="resTable" class="tblwrap"></div>
     <h3>랭킹</h3>
-    <div class="tabs srcTabs hidden"><button class="btn sm" data-src="global">🌐 전체 (온라인)</button><button class="btn sm" data-src="local">이 PC</button></div>
     <div class="tabs" data-board="boardRes"><button class="btn sm sel" data-tab="total">누적 총점</button><button class="btn sm" data-tab="best">최고 점수</button></div>
     <div id="boardRes" class="tblwrap"></div>
     <div class="row" id="resBtns" style="margin-top:18px;justify-content:flex-end"></div>
@@ -270,6 +243,8 @@ const TIERS=[
 ];
 const ZOOMS=[1,2.5,5];
 const BOLT=0.9, NOSCOPE_SPREAD=80, HEAD_MULT=1.5;
+const GAME_DUR=60;       // 모든 경기 1분 고정
+const TARGET_SCALE=1.5;  // 표적 크기 1.5배
 const PCOLORS=['#38bdf8','#f472b6','#a3e635','#fbbf24'];
 const PREFIX='sniperduel-aimtrainer-v1-';
 const BOT_NAMES=['BOT 알파','BOT 브라보','BOT 찰리'];
@@ -285,6 +260,7 @@ const store={
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
 };
 const settings=Object.assign({name:'',sens:1,ssens:0.8,auto:true,sound:true,soloDur:60,shareUrl:''},store.get('sd_settings',{}));
+settings.auto=true;settings.sound=true; // 발사 후 자동 줌 해제 · 효과음: 항상 켜짐 (끄는 기능 없음)
 const PEER_OPTS={debug:1,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'}]}};
 function saveSettings(){store.set('sd_settings',settings)}
 
@@ -297,7 +273,8 @@ function buildSchedule(seed,dur){
     const x=r(); let tier=TIERS.length-1, acc=0;
     for(let i=0;i<TIERS.length;i++){acc+=TIERS[i].w;if(x<acc){tier=i;break}}
     const T=TIERS[tier], v=R(T.vmin,T.vmax);
-    const y0=R(370,800), s=0.55+(y0-370)/430*0.6;
+    // 표적 크기: 기본 대비 TARGET_SCALE배 (그림·명중 판정 모두 s 를 사용)
+    const y0=R(380,760), s=(0.55+(y0-380)/380*0.6)*TARGET_SCALE;
     const dir=r()<0.5?1:-1;
     const A=r()<0.45?R(30,90):0, w=R(1.5,4);
     const B=r()<0.25?R(35,80)*s:0, w2=R(1.8,3.2);
@@ -672,7 +649,7 @@ class Pane{
 
 /* =================== app state =================== */
 let myId='me';
-const lobby={players:[],mode:2,dur:180,view:'split'};
+const lobby={players:[],mode:2,dur:GAME_DUR,view:'split'};
 const VIEW_LABEL={split:'분할 화면 (각자 화면을 나눠서 보기)',shared:'하나의 화면 공유 (같은 대상을 먼저 맞히면 득점)'};
 let match=null, botSeq=1;
 const net={peer:null,role:null,conns:new Map(),hostConn:null,code:'',online:false};
@@ -696,7 +673,7 @@ function broadcastLobby(){broadcast({t:'lobby',players:lobby.players,mode:lobby.
 function createRoom(){
   resetNet();cleanupMatch();
   net.role='host';myId='H';
-  lobby.players=[{id:'H',name:myName(),bot:false}];lobby.mode=2;lobby.dur=180;
+  lobby.players=[{id:'H',name:myName(),bot:false}];lobby.mode=2;lobby.dur=GAME_DUR;
   show('#lobby');renderLobby();
   if(typeof Peer==='undefined'){setLobbyMsg('PeerJS를 불러오지 못해 오프라인 모드입니다 (봇 대결만 가능). 인터넷 연결을 확인하세요.');renderLobby();return}
   openHostPeer(0);
@@ -893,11 +870,11 @@ function cleanupMatch(){
 }
 function startSolo(){
   resetNet();cleanupMatch();net.role='solo';myId='me';
-  startMatch({seed:(Math.random()*2147483647)|0,dur:settings.soloDur,players:[{id:'me',name:myName(),bot:false}],cd:3000});
+  startMatch({seed:(Math.random()*2147483647)|0,dur:GAME_DUR,players:[{id:'me',name:myName(),bot:false}],cd:3000});
 }
 function hostStart(){
   if(lobby.players.length!==lobby.mode)return;
-  const msg={t:'start',seed:(Math.random()*2147483647)|0,dur:lobby.dur,players:lobby.players,cd:3500,view:lobby.view};
+  const msg={t:'start',seed:(Math.random()*2147483647)|0,dur:GAME_DUR,players:lobby.players,cd:3500,view:lobby.view};
   broadcast(msg);startMatch(msg);
 }
 function startMatch(m){
@@ -1154,9 +1131,6 @@ function boardTable(tab,arr,online){
 function renderBoard(elId){
   const el=document.getElementById(elId),tab=boardTab[elId];
   $$(`[data-board="${elId}"] [data-tab]`).forEach(b=>b.classList.toggle('sel',b.dataset.tab===tab));
-  $$('.srcTabs').forEach(t=>t.classList.toggle('hidden',!sb));
-  $$('[data-src]').forEach(b=>b.classList.toggle('sel',b.dataset.src===boardSrc));
-  $('#btnReset').classList.toggle('hidden',boardSrc!=='local');
   if(boardSrc==='global'&&sb){
     const tok=el._tok=(el._tok||0)+1;
     if(!gCache[tab])el.innerHTML='<p class="mute" style="margin:6px 0">전체 랭킹 불러오는 중…</p>';
@@ -1359,36 +1333,25 @@ function goMenu(){
   resetNet();cleanupMatch();
   $('#results').classList.add('hidden');show('#menu');renderBoard('boardMenu');
 }
-function updateSoundBtn(){$('#btnSound').textContent=settings.sound?'소리 ON':'소리 OFF'}
+function updateSoundBtn(){} // 효과음은 항상 켜짐 (토글 없음)
 
 /* =================== wiring =================== */
 function init(){
   BG=makeBG();
-  $('#tierBox').innerHTML=TIERS.map(T=>`<div class="tier" style="--tc:${T.color}"><b>${T.pts}</b><small>${T.name}<br>${T.vmin}~${T.vmax} px/s</small></div>`).join('');
   const nameIn=$('#nameIn');nameIn.value=settings.name;
   nameIn.addEventListener('input',()=>{settings.name=nameIn.value.slice(0,12);saveSettings()});
-  const sl=(id,key,dg)=>{const i=$('#'+id),o=$('#'+id+'O');i.value=settings[key];o.textContent=(+settings[key]).toFixed(dg);i.addEventListener('input',()=>{settings[key]=+i.value;o.textContent=(+i.value).toFixed(dg);saveSettings()})};
-  sl('sens','sens',2);sl('ssens','ssens',2);
-  $('#auto').checked=settings.auto;$('#auto').onchange=e=>{settings.auto=e.target.checked;saveSettings()};
-  $('#sound').checked=settings.sound;$('#sound').onchange=e=>{settings.sound=e.target.checked;saveSettings()};
-  const soloSel=()=>$$('[data-solo]').forEach(b=>b.classList.toggle('sel',+b.dataset.solo===settings.soloDur));soloSel();
-  $$('[data-solo]').forEach(b=>b.onclick=()=>{settings.soloDur=+b.dataset.solo;saveSettings();soloSel()});
-  $('#btnSolo').onclick=()=>{ac();startSolo()};
   $('#btnHost').onclick=()=>{ac();createRoom()};
   $('#btnJoin').onclick=()=>{ac();joinRoom()};
   $('#codeIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('#btnJoin').click()});
-  $('#btnReset').onclick=()=>{if(confirm('이 PC에 저장된 모든 랭킹 기록을 지울까요?')){store.set('sd_records_v1',[]);renderBoard('boardMenu')}};
   $$('[data-board]').forEach(box=>box.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{boardTab[box.dataset.board]=b.dataset.tab;renderBoard(box.dataset.board)}));
   $('#btnCopy').onclick=()=>{const c=net.code;if(!c)return;(navigator.clipboard?navigator.clipboard.writeText(c):Promise.reject()).then(()=>setLobbyMsg('방 코드가 복사되었습니다: '+c)).catch(()=>setLobbyMsg('방 코드: '+c))};
   $('#btnLeave').onclick=goMenu;
-  $('#btnDl').onclick=downloadGame;$('#btnDl2').onclick=downloadGame;
   $$('[data-mode]').forEach(b=>b.onclick=()=>{const m=+b.dataset.mode;if(m<lobby.players.length)return;lobby.mode=m;broadcastLobby();renderLobby()});
   $$('[data-view]').forEach(b=>b.onclick=()=>{lobby.view=b.dataset.view;broadcastLobby();renderLobby()});
   $$('[data-dur]').forEach(b=>b.onclick=()=>{lobby.dur=+b.dataset.dur;broadcastLobby();renderLobby()});
   $$('[data-bot]').forEach(b=>b.onclick=()=>addBot(b.dataset.bot));
   $('#slots').addEventListener('click',e=>{const id=e.target.dataset&&e.target.dataset.rm;if(id){lobby.players=lobby.players.filter(p=>p.id!==id);broadcastLobby();renderLobby()}});
   $('#btnStart').onclick=hostStart;
-  $('#btnSound').onclick=()=>{settings.sound=!settings.sound;saveSettings();updateSoundBtn();$('#sound').checked=settings.sound};
   $('#btnQuit').onclick=()=>{if(confirm('게임에서 나가시겠습니까?'))goMenu()};
   $('#btnCopyLink').onclick=()=>{const u=inviteUrl(net.code);if(u)copyText(u,'초대 링크가 복사되었습니다: '+u);else if(net.code)copyText(net.code,'방 코드가 복사되었습니다: '+net.code)};
   $('#shareUrl').addEventListener('input',e=>{settings.shareUrl=e.target.value.trim();saveSettings();renderInvite()});
@@ -1400,7 +1363,6 @@ function init(){
   }
   nameIn.addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('#inviteBanner').classList.contains('hidden'))$('#btnQuickJoin').click()});
   // 온라인 기능
-  $$('[data-src]').forEach(b=>b.onclick=()=>{boardSrc=b.dataset.src;renderBoard('boardMenu');if(match&&match.done)renderBoard('boardRes')});
   $('#roomList').addEventListener('click',e=>{
     const code=e.target.dataset&&e.target.dataset.joincode;if(!code)return;
     ac();$('#codeIn').value=code;
