@@ -1,0 +1,16 @@
+{
+  "name": "sniper-duel",
+  "private": true,
+  "description": "Sniper Duel - characterization tests (the game itself has no build step)",
+  "scripts": {
+    "test": "playwright test",
+    "test:logic": "playwright test tests/logic.spec.js",
+    "test:ui": "playwright test tests/ui.spec.js",
+    "test:multi": "playwright test tests/multiplayer.spec.js",
+    "test:online": "playwright test tests/online.spec.js",
+    "test:update": "playwright test tests/logic.spec.js --update-snapshots"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1"
+  }
+}

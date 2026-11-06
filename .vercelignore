@@ -1,3 +1,14 @@
 local-server
 supabase
 README.md
+legacy
+
+# 테스트·문서 (배포 불필요)
+tests
+docs
+node_modules
+test-results
+playwright-report
+package.json
+package-lock.json
+playwright.config.js

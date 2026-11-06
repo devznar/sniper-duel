@@ -241,18 +241,6 @@ tr.me td{background:rgba(245,158,11,.08)}
 
 <script>
 'use strict';
-/* 페이지 원본(실행 전 상태)을 보관 → [게임 파일 다운로드]로 그대로 저장 */
-const PAGE_SRC='<!doctype html>\n'+document.documentElement.outerHTML;
-function gameFileName(){
-  try{const n=decodeURIComponent(location.pathname.split('/').pop()||'');if(/\.html?$/i.test(n))return n}catch(e){}
-  return '어택서든.html';
-}
-function downloadGame(){
-  const blob=new Blob([PAGE_SRC],{type:'text/html;charset=utf-8'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=gameFileName();
-  document.body.appendChild(a);a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);
-}
 /* =================== constants =================== */
 const WORLD_W=1600, WORLD_H=900, HORIZON=300;
 const TIERS=[
@@ -269,20 +257,39 @@ const PCOLORS=['#38bdf8','#f472b6','#a3e635','#fbbf24'];
 const PREFIX='sniperduel-aimtrainer-v1-';
 const BOT_NAMES=['BOT 알파','BOT 브라보','BOT 찰리'];
 const SKILLS={easy:{label:'쉬움',v:0.4},normal:{label:'보통',v:0.62},hard:{label:'어려움',v:0.86}};
+const MAX_PLAYERS=4, NAME_MAX=12, CODE_LEN=5;
+// 점수: 연속 명중마다 +10%, 최대 +50%(5단계), 5점 단위로 반올림
+const STREAK_STEP=0.1, STREAK_MAX_STEPS=5, SCORE_ROUND=5;
+// 표적 명중 범위 (표적 크기 s=1 기준, 원점 = 표적 위치). 명중 판정 · 봇 조준 · 표적 그림이 같이 쓴다
+const HITBOX={headY:-50,headR:13,bodyHalfW:18,bodyTop:-36,bodyBottom:62};
+const BOT_BODY_AIM_Y=-8;  // 봇이 몸통을 노릴 때 조준 높이
+const SHOT_KEEP_SEC=1.5;  // 발사 기록(이펙트용) 보관 시간
+const SHOT_SEND_SEC=1.3;  // 네트워크로 보내는 최근 발사 기록 범위
+// 경기 진행 타이밍 (ms)
+const SOLO_COUNTDOWN_MS=3000, MATCH_COUNTDOWN_MS=3500;
+const NET_SEND_MS=66, TOPBAR_MS=150;
+const LOCAL_RESULT_DELAY_MS=900, HOST_FINAL_WAIT_MS=4000, CLIENT_RESULT_WAIT_MS=9000;
+const JOIN_SLOW_WARN_MS=10000, JOIN_TIMEOUT_MS=25000, REJECT_CLOSE_MS=400;
+const ENDING_SEC=9;
+// 기록 · 랭킹
+const STORE_SETTINGS='sd_settings', STORE_RECORDS='sd_records_v1';
+const LOCAL_RECORDS_MAX=800, BOARD_TOP_N=15, GLOBAL_CACHE_MS=15000;
+const ONLINE_DURATIONS=[60,120,180]; // supabase/schema.sql 의 duration 허용값과 같아야 함
 
 const $=s=>document.querySelector(s);
 const $$=s=>Array.from(document.querySelectorAll(s));
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
 const fmt=n=>Math.round(n).toLocaleString('ko-KR');
+const accPct=(hits,fired)=>fired?Math.round(hits/fired*100):0; // 명중률(%)
 const store={
   get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
 };
-const settings=Object.assign({name:'',sens:1,ssens:0.8,auto:true,sound:true,soloDur:60,shareUrl:''},store.get('sd_settings',{}));
-settings.auto=true;settings.sound=true; // 발사 후 자동 줌 해제 · 효과음: 항상 켜짐 (끄는 기능 없음)
+// 효과음과 '발사 후 자동 줌 해제'는 항상 켜짐 (끄는 설정 없음)
+const settings=Object.assign({name:'',sens:1,ssens:0.8,shareUrl:''},store.get(STORE_SETTINGS,{}));
 const PEER_OPTS={debug:1,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'}]}};
-function saveSettings(){store.set('sd_settings',settings)}
+function saveSettings(){store.set(STORE_SETTINGS,settings)}
 
 /* =================== deterministic target schedule =================== */
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -322,8 +329,9 @@ function activeTargets(sched,dead,t){
 }
 function hitTest(o,px,py){
   const s=o.s,dx=px-o.x,dy=py-o.y;
-  if(Math.hypot(dx,dy+50*s)<=13*s)return 'head';
-  if(dx>=-18*s&&dx<=18*s&&dy>=-36*s&&dy<=62*s)return 'body';
+  const H=HITBOX;
+  if(Math.hypot(dx,dy-H.headY*s)<=H.headR*s)return 'head';
+  if(dx>=-H.bodyHalfW*s&&dx<=H.bodyHalfW*s&&dy>=H.bodyTop*s&&dy<=H.bodyBottom*s)return 'body';
   return null;
 }
 
@@ -333,7 +341,7 @@ class Game{
     this.sched=sched;this.dead=new Set();this.deadList=[];
     this.ax=WORLD_W/2;this.ay=520;this.zi=0;this.lastShot=-99;this.shots=[];
     this.score=0;this.hits=0;this.fired=0;this.heads=0;this.streak=0;this.best=0;this.th=[0,0,0,0];
-    this.auto=true;this.swSeed=Math.random()*100;
+    this.swSeed=Math.random()*100;
   }
   sway(t){
     if(!this.zi)return[0,0];
@@ -357,16 +365,16 @@ class Game{
     if(hit){
       const head=hit.h==='head';
       this.streak++;this.best=Math.max(this.best,this.streak);
-      const mult=(head?HEAD_MULT:1)*(1+0.1*Math.min(this.streak-1,5));
-      const pts=Math.round(TIERS[hit.o.tier].pts*mult/5)*5;
+      const mult=(head?HEAD_MULT:1)*(1+STREAK_STEP*Math.min(this.streak-1,STREAK_MAX_STEPS));
+      const pts=Math.round(TIERS[hit.o.tier].pts*mult/SCORE_ROUND)*SCORE_ROUND;
       this.score+=pts;this.hits++;if(head)this.heads++;this.th[hit.o.tier]++;
       this.dead.add(hit.o.id);this.deadList.push(hit.o.id);
       if(this.blocked)this.blocked.add(hit.o.id); // 같은 PC의 다른 플레이어(봇)에게 즉시 반영
       shot.hit=1;shot.head=head?1:0;shot.pts=pts;
     }else this.streak=0;
     this.shots.push(shot);
-    this.shots=this.shots.filter(s=>t-s.t<1.5);
-    if(this.auto)this.zi=0;
+    this.shots=this.shots.filter(s=>t-s.t<SHOT_KEEP_SEC);
+    this.zi=0; // 발사 후 자동으로 줌 해제
     return shot;
   }
 }
@@ -401,7 +409,7 @@ class Bot{
     g.ax+=vx*dt*ff;g.ay+=vy*dt*ff;
     const dec=Math.exp(-dt*(1.1+3.6*k));this.ex*=dec;this.ey*=dec;
     const sw=g.sway(t);
-    const tx=fx+this.ex*s-sw[0]*k, ty=(this.head?fy-50*s:fy-8*s)+this.ey*s-sw[1]*k;
+    const tx=fx+this.ex*s-sw[0]*k, ty=fy+(this.head?HITBOX.headY:BOT_BODY_AIM_Y)*s+this.ey*s-sw[1]*k;
     const dx=tx-g.ax,dy=ty-g.ay,dist=Math.hypot(dx,dy);
     if(dist>0.01){
       const maxV=(g.zi?520:1700)*(0.55+k*0.7);
@@ -475,7 +483,7 @@ function outNode(a,vol,pan){
 }
 // 저격총 발사음: 노이즈 폭발 + 저역 펀치 + 고역 크랙 + 볼트 장전 소리
 function sfxShot(vol,pan){
-  if(!settings.sound)return;const a=ac();if(!a)return;
+  const a=ac();if(!a)return;
   vol=vol==null?1:vol;const t0=a.currentTime,out=outNode(a,vol,pan);
   const src=a.createBufferSource();src.buffer=noiseBuf(a);
   const f=a.createBiquadFilter();f.type='lowpass';f.frequency.setValueAtTime(5000,t0);f.frequency.exponentialRampToValueAtTime(400,t0+0.35);
@@ -491,29 +499,29 @@ function sfxShot(vol,pan){
   [0,0.2].forEach(dt=>{const o2=a.createOscillator(),g2=a.createGain();o2.type='square';o2.frequency.value=dt?900:1400;g2.gain.setValueAtTime(0.0001,bt+dt);g2.gain.exponentialRampToValueAtTime(0.06,bt+dt+0.005);g2.gain.exponentialRampToValueAtTime(0.0001,bt+dt+0.05);o2.connect(g2).connect(out);o2.start(bt+dt);o2.stop(bt+dt+0.06)});
 }
 function sfxDry(){
-  if(!settings.sound)return;const a=ac();if(!a)return;const t0=a.currentTime,o=a.createOscillator(),g=a.createGain();
+  const a=ac();if(!a)return;const t0=a.currentTime,o=a.createOscillator(),g=a.createGain();
   o.type='square';o.frequency.value=2400;g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.05,t0+0.003);g.gain.exponentialRampToValueAtTime(0.0001,t0+0.03);o.connect(g).connect(a.destination);o.start(t0);o.stop(t0+0.04);
 }
 // 뿅망치: 쿵 + 뿅~
 function sfxBonk(pan){
-  if(!settings.sound)return;const a=ac();if(!a)return;const t0=a.currentTime,out=outNode(a,0.8,pan);
+  const a=ac();if(!a)return;const t0=a.currentTime,out=outNode(a,0.8,pan);
   const o=a.createOscillator(),g=a.createGain();o.frequency.setValueAtTime(160,t0);o.frequency.exponentialRampToValueAtTime(50,t0+0.15);
   g.gain.setValueAtTime(0.8,t0);g.gain.exponentialRampToValueAtTime(0.001,t0+0.18);o.connect(g).connect(out);o.start(t0);o.stop(t0+0.2);
   const s=a.createOscillator(),sg=a.createGain();s.type='triangle';s.frequency.setValueAtTime(700,t0+0.02);s.frequency.exponentialRampToValueAtTime(1800,t0+0.12);s.frequency.exponentialRampToValueAtTime(1100,t0+0.22);
   sg.gain.setValueAtTime(0.0001,t0+0.02);sg.gain.exponentialRampToValueAtTime(0.25,t0+0.04);sg.gain.exponentialRampToValueAtTime(0.0001,t0+0.25);s.connect(sg).connect(out);s.start(t0+0.02);s.stop(t0+0.27);
 }
 function sfxFanfare(){
-  if(!settings.sound)return;const a=ac();if(!a)return;
+  const a=ac();if(!a)return;
   [523,659,784,1047,784,1047].forEach((fq,i)=>{const t0=a.currentTime+i*0.13,o=a.createOscillator(),g=a.createGain();o.type='triangle';o.frequency.value=fq;
     g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.18,t0+0.01);g.gain.exponentialRampToValueAtTime(0.0001,t0+(i===5?0.6:0.16));o.connect(g).connect(a.destination);o.start(t0);o.stop(t0+0.62)});
 }
 function sfxHit(head){
-  if(!settings.sound)return;const a=ac();if(!a)return;
+  const a=ac();if(!a)return;
   (head?[1500,2100]:[1200]).forEach((fq,i)=>{const o=a.createOscillator(),g=a.createGain(),t0=a.currentTime+i*0.07;o.type='triangle';o.frequency.value=fq;
     g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.25,t0+0.005);g.gain.exponentialRampToValueAtTime(0.0001,t0+0.12);o.connect(g).connect(a.destination);o.start(t0);o.stop(t0+0.13)});
 }
 function sfxBeep(hi){
-  if(!settings.sound)return;const a=ac();if(!a)return;const o=a.createOscillator(),g=a.createGain(),t0=a.currentTime;
+  const a=ac();if(!a)return;const o=a.createOscillator(),g=a.createGain(),t0=a.currentTime;
   o.frequency.value=hi?1320:660;g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(0.15,t0+0.01);g.gain.exponentialRampToValueAtTime(0.0001,t0+(hi?0.4:0.15));o.connect(g).connect(a.destination);o.start(t0);o.stop(t0+0.45);
 }
 
@@ -524,9 +532,9 @@ function drawTarget(x,o){
   x.save();x.translate(o.x,o.y);x.scale(o.s,o.s);
   x.fillStyle='rgba(0,0,0,.35)';x.beginPath();x.ellipse(0,63,24,6,0,0,Math.PI*2);x.fill();
   x.fillStyle='#232933';x.fillRect(-15,18,12,44);x.fillRect(3,18,12,44);
-  rr(x,-18,-36,36,58,9);x.fillStyle='#363e4c';x.fill();x.lineWidth=2.5;x.strokeStyle=T.color;x.stroke();
+  rr(x,-HITBOX.bodyHalfW,HITBOX.bodyTop,HITBOX.bodyHalfW*2,58,9);x.fillStyle='#363e4c';x.fill();x.lineWidth=2.5;x.strokeStyle=T.color;x.stroke();
   x.strokeStyle='rgba(255,255,255,.3)';x.lineWidth=1.5;x.beginPath();x.arc(0,-8,10,0,Math.PI*2);x.stroke();x.beginPath();x.arc(0,-8,4,0,Math.PI*2);x.stroke();
-  x.beginPath();x.arc(0,-50,12,0,Math.PI*2);x.fillStyle='#465062';x.fill();x.lineWidth=2.5;x.strokeStyle=T.color;x.stroke();
+  x.beginPath();x.arc(0,HITBOX.headY,12,0,Math.PI*2);x.fillStyle='#465062';x.fill();x.lineWidth=2.5;x.strokeStyle=T.color;x.stroke();
   x.font='bold 15px "Segoe UI",sans-serif';x.textAlign='center';x.textBaseline='middle';
   const w=x.measureText(T.pts).width+10;
   x.fillStyle='rgba(0,0,0,.55)';x.fillRect(-w/2,-87,w,18);x.fillStyle=T.color;x.fillText(T.pts,0,-78);
@@ -553,7 +561,7 @@ class Pane{
     x.setTransform(sc,0,0,sc,ox,oy);
     x.drawImage(BG,0,0,WORLD_W,WORLD_H);
     if(v&&t>=0){
-      const act=activeTargets(match.sched,info.dead||v.dead,Math.min(t,match.dur)).sort((a,b)=>a.y-b.y);
+      const act=activeTargets(info.sched,info.dead||v.dead,Math.min(t,info.dur)).sort((a,b)=>a.y-b.y);
       for(const o of act)drawTarget(x,o);
       const allShots=info.others?v.shots.concat(...info.others.map(o=>o.v.shots)):v.shots;
       for(const s of allShots){
@@ -649,19 +657,19 @@ class Pane{
     x.fillStyle='rgba(0,0,0,.6)';x.fillRect(W-pad-sw,pad,sw,38*u);x.fillStyle='#ffd166';x.fillText(st,W-pad-11*u,pad+19*u);
     // stats
     x.font=`600 ${Math.round(13*u)}px "Segoe UI","Malgun Gothic",sans-serif`;x.textAlign='left';
-    const acc=v.f?Math.round(v.h/v.f*100):0;
+    const acc=accPct(v.h,v.f);
     const s2=`명중 ${v.h}/${v.f} · ${acc}% · 헤드 ${v.hd} · 연속 ${v.st}`;
     const s2w=x.measureText(s2).width+20*u;
     x.fillStyle='rgba(0,0,0,.6)';x.fillRect(pad,H-pad-26*u,s2w,26*u);x.fillStyle='#dfe7f1';x.fillText(s2,pad+10*u,H-pad-13*u);
     if(v.zi){x.textAlign='right';x.font=`800 ${Math.round(14*u)}px "Segoe UI",sans-serif`;x.fillStyle='#7dd3fc';x.fillText('x'+ZOOMS[v.zi],W-pad-6*u,H-pad-13*u)}
-    if(v.st>=2){x.textAlign='left';x.font=`900 ${Math.round(13*u)}px "Segoe UI",sans-serif`;x.fillStyle='#fb923c';x.fillText(`COMBO +${Math.min(v.st-1,5)*10}%`,pad+2*u,H-pad-40*u)}
+    if(v.st>=2){x.textAlign='left';x.font=`900 ${Math.round(13*u)}px "Segoe UI",sans-serif`;x.fillStyle='#fb923c';x.fillText(`COMBO +${Math.round(Math.min(v.st-1,STREAK_MAX_STEPS)*STREAK_STEP*100)}%`,pad+2*u,H-pad-40*u)}
     // overlays
     x.textAlign='center';
     if(v.dc){x.fillStyle='rgba(0,0,0,.6)';x.fillRect(0,H/2-26*u,W,52*u);x.fillStyle='#f87171';x.font=`800 ${Math.round(20*u)}px "Segoe UI",sans-serif`;x.fillText('연결 끊김',W/2,H/2)}
     if(t<0){x.fillStyle='rgba(0,0,0,.45)';x.fillRect(0,0,W,H);x.fillStyle='#fff';x.font=`900 ${Math.round(90*u)}px "Segoe UI",sans-serif`;x.fillText(Math.ceil(-t),W/2,H/2);
       x.font=`700 ${Math.round(15*u)}px "Segoe UI","Malgun Gothic",sans-serif`;x.fillStyle='#cbd5e1';x.fillText('준비하세요',W/2,H/2+64*u)}
-    else if(t>=match.dur){x.fillStyle='rgba(0,0,0,.5)';x.fillRect(0,0,W,H);x.fillStyle='#ffd166';x.font=`900 ${Math.round(48*u)}px "Segoe UI",sans-serif`;x.fillText('TIME UP',W/2,H/2)}
-    if(info.me&&!info.locked&&!match.ended){
+    else if(t>=info.dur){x.fillStyle='rgba(0,0,0,.5)';x.fillRect(0,0,W,H);x.fillStyle='#ffd166';x.font=`900 ${Math.round(48*u)}px "Segoe UI",sans-serif`;x.fillText('TIME UP',W/2,H/2)}
+    if(info.me&&!info.locked&&!info.ended){
       x.fillStyle='rgba(0,0,0,.7)';x.fillRect(0,H-pad-80*u,W,36*u);x.fillStyle='#f59e0b';x.font=`800 ${Math.round(15*u)}px "Segoe UI","Malgun Gothic",sans-serif`;
       x.fillText('클릭하면 마우스가 내 화면에 고정되고 조준을 시작합니다 (Esc: 해제)',W/2,H-pad-62*u)}
   }
@@ -679,7 +687,7 @@ function show(id){['#menu','#lobby','#play'].forEach(s=>$(s).classList.toggle('h
 function myName(){return (settings.name||'').trim()||'플레이어'}
 
 /* =================== networking =================== */
-function genCode(){const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<5;i++)s+=A[Math.floor(Math.random()*A.length)];return s}
+function genCode(){const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<CODE_LEN;i++)s+=A[Math.floor(Math.random()*A.length)];return s}
 function resetNet(){
   const p=net.peer;net.role=null;net.peer=null;net.hostConn=null;net.online=false;net.code='';
   for(const c of net.conns.values()){try{c.close()}catch(e){}}net.conns.clear();
@@ -719,9 +727,9 @@ function openHostPeer(tries){
 function hostOnData(conn,m){
   if(!m||typeof m!=='object')return;
   if(m.t==='hello'){
-    const name=String(m.name||'플레이어').slice(0,12)||'플레이어';
-    if(match){conn.send({t:'reject',reason:'이미 게임이 진행 중입니다.'});setTimeout(()=>conn.close(),400);return}
-    if(lobby.players.length>=4){conn.send({t:'reject',reason:'방이 가득 찼습니다 (최대 4인).'});setTimeout(()=>conn.close(),400);return}
+    const name=String(m.name||'플레이어').slice(0,NAME_MAX)||'플레이어';
+    if(match){conn.send({t:'reject',reason:'이미 게임이 진행 중입니다.'});setTimeout(()=>conn.close(),REJECT_CLOSE_MS);return}
+    if(lobby.players.length>=MAX_PLAYERS){conn.send({t:'reject',reason:'방이 가득 찼습니다 (최대 4인).'});setTimeout(()=>conn.close(),REJECT_CLOSE_MS);return}
     net.conns.set(conn.peer,conn);
     lobby.players.push({id:conn.peer,name,bot:false});
     if(lobby.players.length>lobby.mode)lobby.mode=lobby.players.length;
@@ -738,7 +746,7 @@ function hostOnClose(conn){
   net.conns.delete(conn.peer);
   if(match){
     const s=match.remote.get(conn.peer);
-    if(s)s.dc=true;else match.remote.set(conn.peer,{id:conn.peer,sc:0,h:0,f:0,hd:0,st:0,bs:0,th:[0,0,0,0],ax:800,ay:450,zi:0,ls:-99,d:[],sh:[],dc:true});
+    if(s)s.dc=true;else{const b=blankRemoteState(conn.peer);b.dc=true;match.remote.set(conn.peer,b)}
     match.finals.add(conn.peer);checkFinals();
   }else{
     lobby.players=lobby.players.filter(p=>p.id!==conn.peer);
@@ -747,19 +755,19 @@ function hostOnClose(conn){
 }
 function joinRoom(){
   const code=$('#codeIn').value.trim().toUpperCase();
-  if(code.length!==5){menuMsg('방 코드 5자리를 입력하세요.');return}
+  if(code.length!==CODE_LEN){menuMsg('방 코드 5자리를 입력하세요.');return}
   if(typeof Peer==='undefined'){menuMsg('PeerJS를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');return}
   resetNet();cleanupMatch();
   net.role='client';net.code=code;
   menuMsg('연결 중…');
   const peer=new Peer(PEER_OPTS);net.peer=peer;
   let p2pWarn=null;
-  const to=setTimeout(()=>{if(net.peer===peer&&!net.online){clearTimeout(p2pWarn);menuMsg('연결 시간이 초과되었습니다. 코드 또는 네트워크를 확인하세요. (회사·학교 방화벽/NAT 환경에서는 P2P 연결이 차단될 수 있습니다)');resetNet()}},25000);
+  const to=setTimeout(()=>{if(net.peer===peer&&!net.online){clearTimeout(p2pWarn);menuMsg('연결 시간이 초과되었습니다. 코드 또는 네트워크를 확인하세요. (회사·학교 방화벽/NAT 환경에서는 P2P 연결이 차단될 수 있습니다)');resetNet()}},JOIN_TIMEOUT_MS);
   peer.on('open',id=>{
     if(net.peer!==peer)return;
     myId=id;menuMsg('방에 연결 중…');
     const conn=peer.connect(PREFIX+code,{reliable:true});net.hostConn=conn;
-    p2pWarn=setTimeout(()=>{if(net.peer===peer&&!net.online)menuMsg('연결이 지연되고 있습니다… 회사·학교 방화벽이나 공유기(NAT) 설정 때문에 PC 간 P2P 연결이 막혔을 수 있습니다. 다른 네트워크(예: 휴대폰 핫스팟)로 시도해 보세요.')},10000);
+    p2pWarn=setTimeout(()=>{if(net.peer===peer&&!net.online)menuMsg('연결이 지연되고 있습니다… 회사·학교 방화벽이나 공유기(NAT) 설정 때문에 PC 간 P2P 연결이 막혔을 수 있습니다. 다른 네트워크(예: 휴대폰 핫스팟)로 시도해 보세요.')},JOIN_SLOW_WARN_MS);
     conn.on('open',()=>{clearTimeout(to);clearTimeout(p2pWarn);net.online=true;conn.send({t:'hello',name:myName()});menuMsg('');hideBanner()});
     conn.on('data',clientOnData);
     conn.on('close',()=>{if(net.hostConn===conn&&net.role==='client'){alert('호스트와의 연결이 끊어졌습니다.');goMenu()}});
@@ -797,7 +805,7 @@ function renderLobby(){
   $('#clientWait').classList.toggle('hidden',host);
   $('#lobbyCount').textContent=`${lobby.players.length} / ${lobby.mode}`;
   let h='';
-  for(let i=0;i<4;i++){
+  for(let i=0;i<MAX_PLAYERS;i++){
     const p=lobby.players[i],off=i>=lobby.mode;
     if(p){
       const tag=p.bot?`봇 · ${SKILLS[p.skillKey]?SKILLS[p.skillKey].label:''}`:(p.id==='H'?'호스트':'참가자');
@@ -812,7 +820,6 @@ function renderLobby(){
     $('#viewDesc').textContent=lobby.view==='shared'
       ?'모두가 같은 전장을 한 화면으로 봅니다. 상대의 조준점이 보이고, 같은 대상을 먼저 맞힌 사람만 점수를 얻습니다.'
       :'참가자 수만큼 화면을 2·3·4분할해서 각자 게임하는 모습을 동시에 봅니다. 대상은 모두에게 똑같이 나옵니다.';
-    $$('[data-dur]').forEach(b=>b.classList.toggle('sel',+b.dataset.dur===lobby.dur));
     $$('[data-bot]').forEach(b=>b.disabled=lobby.players.length>=lobby.mode);
     const need=lobby.mode-lobby.players.length;
     $('#btnStart').disabled=need!==0;
@@ -890,11 +897,11 @@ function cleanupMatch(){
 }
 function startSolo(){
   resetNet();cleanupMatch();net.role='solo';myId='me';
-  startMatch({seed:(Math.random()*2147483647)|0,dur:GAME_DUR,players:[{id:'me',name:myName(),bot:false}],cd:3000});
+  startMatch({seed:(Math.random()*2147483647)|0,dur:GAME_DUR,players:[{id:'me',name:myName(),bot:false}],cd:SOLO_COUNTDOWN_MS});
 }
 function hostStart(){
   if(lobby.players.length!==lobby.mode)return;
-  const msg={t:'start',seed:(Math.random()*2147483647)|0,dur:GAME_DUR,players:lobby.players,cd:3500,view:lobby.view};
+  const msg={t:'start',seed:(Math.random()*2147483647)|0,dur:GAME_DUR,players:lobby.players,cd:MATCH_COUNTDOWN_MS,view:lobby.view};
   broadcast(msg);startMatch(msg);
 }
 function startMatch(m){
@@ -903,11 +910,11 @@ function startMatch(m){
   match={seed:m.seed,dur:m.dur,sched,players:m.players,startPerf:performance.now()+m.cd,
     local:new Map(),bots:[],remote:new Map(),rviews:new Map(),panes:new Map(),finals:new Set(),
     ended:false,done:false,lastSend:0,lastBar:0,ranks:new Map(),beeped:99,noLock:false,saved:false,heard:new Map()};
-  const own=new Game(sched);own.auto=settings.auto;match.local.set(myId,own);match.own=own;
+  const own=new Game(sched);match.local.set(myId,own);match.own=own;
   if(net.role!=='client'){
-    m.players.forEach((p,i)=>{if(p.bot){const g=new Game(sched);g.auto=true;match.local.set(p.id,g);match.bots.push(new Bot(g,p.skill,(m.seed^((i+1)*99991))>>>0))}});
+    m.players.forEach((p,i)=>{if(p.bot){const g=new Game(sched);match.local.set(p.id,g);match.bots.push(new Bot(g,p.skill,(m.seed^((i+1)*99991))>>>0))}});
   }
-  match.color=new Map(m.players.map((p,i)=>[p.id,PCOLORS[i%4]]));
+  match.color=new Map(m.players.map((p,i)=>[p.id,PCOLORS[i%PCOLORS.length]]));
   match.names=new Map(m.players.map(p=>[p.id,p.name]));
   match.order=[myId,...m.players.map(p=>p.id).filter(id=>id!==myId)];
   match.shared=m.view==='shared'&&m.players.length>1;
@@ -925,8 +932,7 @@ function startMatch(m){
   match.ro=new ResizeObserver(()=>{if(match)match.panes.forEach(p=>p.resize())});
   match.ro.observe(grid);
   match.ownCanvas=match.panes.get(myId).c;
-  bindOwnCanvas(match.ownCanvas);
-  updateSoundBtn();
+  bindGridInput();
   publishRoom(); // 공개 목록에 '게임 중' 표시
 }
 function clock(){return match?(performance.now()-match.startPerf)/1000:0}
@@ -941,7 +947,7 @@ function lockOwn(){
   const plain=()=>{try{const p=c.requestPointerLock();if(p&&p.catch)p.catch(fail)}catch(_){fail()}};
   try{const p=c.requestPointerLock({unadjustedMovement:true});if(p&&p.catch)p.catch(plain)}catch(_){plain()}
 }
-function bindOwnCanvas(){
+function bindGridInput(){
   if(gridBound)return;gridBound=true;
   const grid=$('#grid');
   grid.addEventListener('mousedown',e=>{
@@ -952,7 +958,7 @@ function bindOwnCanvas(){
       if(!match.noLock)return; // 첫 클릭은 마우스 잠금만
     }
     if(e.button===0)doFire();
-    else if(e.button===2)cycleZoom(1);
+    else if(e.button===2)cycleZoom();
   });
   grid.addEventListener('wheel',e=>{
     if(!match||match.ended)return;e.preventDefault();
@@ -976,10 +982,12 @@ function doFire(){
 }
 function cycleZoom(){const t=clock();if(!match||t>=match.dur)return;const g=match.own;g.zi=(g.zi+1)%3}
 
+// 상태를 한 번도 못 받은 채 끊긴 참가자의 빈 상태 (pack() 결과와 같은 형식)
+function blankRemoteState(id){return{id,sc:0,h:0,f:0,hd:0,st:0,bs:0,th:[0,0,0,0],ax:WORLD_W/2,ay:WORLD_H/2,zi:0,ls:-99,d:[],sh:[]}}
 function pack(id,g,t){
   const a=g.aim(Math.max(0,t));
   return{id,sc:g.score,h:g.hits,f:g.fired,hd:g.heads,st:g.streak,bs:g.best,th:g.th.slice(),
-    ax:Math.round(a[0]*10)/10,ay:Math.round(a[1]*10)/10,zi:g.zi,ls:g.lastShot,d:g.deadList,sh:g.shots.filter(s=>t-s.t<1.3)};
+    ax:Math.round(a[0]*10)/10,ay:Math.round(a[1]*10)/10,zi:g.zi,ls:g.lastShot,d:g.deadList,sh:g.shots.filter(s=>t-s.t<SHOT_SEND_SEC)};
 }
 function viewFor(id,t,dt){
   const g=match.local.get(id);
@@ -1016,31 +1024,52 @@ function updateTopBar(t){
   $('#ranks').innerHTML=list.map((p,i)=>`<div class="chip" style="--pc:${match.color.get(p.id)}"><span class="r">${i+1}위</span><span>${esc(p.name)}${p.id===myId?' (나)':''}</span><span class="s">${fmt(p.sc)}</span>${i>0?`<span class="mute" style="font-size:12px">-${fmt(list[0].sc-p.sc)}</span>`:''}</div>`).join('');
 }
 
+const MAX_FRAME_DT=0.05; // 프레임이 밀려도 봇·보간이 한 번에 0.05초 넘게 움직이지 않게
+// 매 프레임: 카운트다운 → (공유 화면) 맞힌 표적 합치기 → 봇 → 네트워크 전송 → 그리기 → 남의 발사음 → 상단 순위 → 시간 종료
 function frame(now){
   requestAnimationFrame(frame);
-  const dt=Math.min(0.05,(now-lastNow)/1000);lastNow=now;
+  const dt=Math.min(MAX_FRAME_DT,(now-lastNow)/1000);lastNow=now;
   if(!match)return;
   const t=(now-match.startPerf)/1000;
-  if(t<0){const n=Math.ceil(-t);if(n!==match.beeped){match.beeped=n;if(n<=3)sfxBeep(false)}}
-  else if(match.beeped!==0){match.beeped=0;sfxBeep(true)}
+  tickCountdown(t);
   if(match.shared)sharedDead();
   if(t>=0&&t<match.dur)for(const b of match.bots)b.update(t,dt);
-  if(net.online&&!match.ended&&now-match.lastSend>66){
-    match.lastSend=now;
-    if(net.role==='client')sendHost({t:'state',s:pack(myId,match.own,t)});
-    else if(net.role==='host')broadcast({t:'states',list:hostStates(t)});
-  }
-  const locked=document.pointerLockElement===match.ownCanvas||match.noLock;
+  sendNetState(now,t);
   const views=new Map(match.order.map(id=>[id,viewFor(id,t,dt)]));
-  const infoOf=id=>({name:match.names.get(id),color:match.color.get(id),rank:match.players.length>1?match.ranks.get(id):0,me:id===myId,locked});
+  renderPanes(views,t);
+  playOthersShots(views,t);
+  if(now-match.lastBar>TOPBAR_MS){match.lastBar=now;updateTopBar(t)}
+  if(t>=match.dur&&!match.ended)onTimeUp(t);
+}
+// 3·2·1 삑, 시작할 때 높은 삑
+function tickCountdown(t){
+  if(t<0){const n=Math.ceil(-t);if(n!==match.beeped){match.beeped=n;if(n<=3)sfxBeep(false)}}
+  else if(match.beeped!==0){match.beeped=0;sfxBeep(true)}
+}
+// 참가자는 내 상태를 호스트에게, 호스트는 모두의 상태를 모두에게 (약 15회/초)
+function sendNetState(now,t){
+  if(!net.online||match.ended||now-match.lastSend<=NET_SEND_MS)return;
+  match.lastSend=now;
+  if(net.role==='client')sendHost({t:'state',s:pack(myId,match.own,t)});
+  else if(net.role==='host')broadcast({t:'states',list:hostStates(t)});
+}
+// 칸마다 그릴 정보. 렌더러(Pane)는 전역 match 대신 이 정보만 본다
+function paneInfo(id,locked){
+  return{name:match.names.get(id),color:match.color.get(id),rank:match.players.length>1?match.ranks.get(id):0,me:id===myId,locked,
+    sched:match.sched,dur:match.dur,ended:match.ended};
+}
+function renderPanes(views,t){
+  const locked=document.pointerLockElement===match.ownCanvas||match.noLock;
   if(match.shared){
-    const info=infoOf(myId);info.dead=match.gd;info.shared=true;
+    const info=paneInfo(myId,locked);info.dead=match.gd;info.shared=true;
     info.others=match.order.filter(id=>id!==myId&&views.get(id)).map((id,idx)=>({v:views.get(id),name:match.names.get(id),color:match.color.get(id),idx}));
     match.panes.get(myId).render(views.get(myId),t,info);
   }else{
-    for(const id of match.paneIds)match.panes.get(id).render(views.get(id),t,infoOf(id));
+    for(const id of match.paneIds)match.panes.get(id).render(views.get(id),t,paneInfo(id,locked));
   }
-  // 다른 플레이어의 발사음 (작게, 공유 화면에선 조준 위치 쪽으로 패닝)
+}
+// 다른 플레이어의 발사음 (작게, 공유 화면에선 조준 위치 쪽으로 패닝)
+function playOthersShots(views,t){
   match.order.forEach((id,i)=>{
     const v=views.get(id);
     if(id===myId||!v||!v.shots.length)return;
@@ -1049,8 +1078,6 @@ function frame(now){
       const pan=match.shared?(v.ax/WORLD_W-0.5)*1.4:((i%2===1)?0.6:-0.6);
       if(prev!==undefined&&t-last.t<0.6)sfxShot(match.shared?0.3:0.22,pan)}
   });
-  if(now-match.lastBar>150){match.lastBar=now;updateTopBar(t)}
-  if(t>=match.dur&&!match.ended)onTimeUp(t);
 }
 function hostStates(t){
   const out=[];
@@ -1066,12 +1093,12 @@ function onTimeUp(t){
   sfxBeep(true);
   if(net.role==='client'){
     sendHost({t:'final',s:pack(myId,match.own,match.dur)});
-    match.clientTimer=setTimeout(()=>{if(match&&!match.done)showResults(localResults())},9000);
+    match.clientTimer=setTimeout(()=>{if(match&&!match.done)showResults(localResults())},CLIENT_RESULT_WAIT_MS);
   }else if(net.role==='host'&&net.online&&net.conns.size){
     broadcast({t:'states',list:hostStates(match.dur)});
-    match.finalTimer=setTimeout(hostFinalize,4000);checkFinals();
+    match.finalTimer=setTimeout(hostFinalize,HOST_FINAL_WAIT_MS);checkFinals();
   }else{
-    setTimeout(()=>{if(match&&!match.done)showResults(localResults())},900);
+    setTimeout(()=>{if(match&&!match.done)showResults(localResults())},LOCAL_RESULT_DELAY_MS);
   }
 }
 function checkFinals(){
@@ -1091,87 +1118,114 @@ function localResults(){
 }
 
 /* =================== results & leaderboard =================== */
+// 표 HTML 공통: 머리글은 문자열 또는 {label, l:왼쪽 정렬, color}
+function tableHtml(head,rows){
+  const th=h=>typeof h==='string'?`<th>${h}</th>`:`<th${h.l?' class="l"':''}${h.color?` style="color:${h.color}"`:''}>${h.label}</th>`;
+  return '<table><thead><tr>'+head.map(th).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table>';
+}
+const rankCell=i=>`<td class="l"><span class="medal m${i+1}">${i+1}</span></td>`;
+const fmtDate=ms=>{const d=new Date(ms);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`};
+function matchModeLabel(){return (match.players.length===1?'솔로':match.players.length+'인')+' '+(match.dur/60)+'분'}
+
 function showResults(list){
   if(!match||match.done)return;match.done=true;
   clearTimeout(match.finalTimer);clearTimeout(match.clientTimer);
   list=list.slice().sort((a,b)=>b.score-a.score||b.hits-a.hits);
-  if(!match.saved){
-    match.saved=true;
-    const recs=store.get('sd_records_v1',[]);
-    const mode=(match.players.length===1?'솔로':match.players.length+'인')+' '+(match.dur/60)+'분';
-    const now=Date.now();
-    for(const r of list)if(!r.bot)recs.push({n:r.name,s:r.score,h:r.hits,f:r.fired,m:mode,d:now});
-    while(recs.length>800)recs.shift();
-    store.set('sd_records_v1',recs);
-    // 온라인 전체 랭킹: 각자 자기 점수만 등록 (봇 제외, 1·2·3분 경기만)
-    const mine=list.find(r=>r.id===myId);
-    if(sb&&mine&&!mine.bot&&[60,120,180].includes(match.dur))
-      submitScore(mine,mode,match.players.length,match.dur).then(()=>{renderBoard('boardRes');renderBoard('boardMenu')});
-  }
+  if(!match.saved){match.saved=true;saveRecords(list)}
   const multi=list.length>1;
   $('#resTitle').textContent=multi?'경기 결과':'연습 결과';
   $('#resWinner').innerHTML=multi?`🏆 우승: <b>${esc(list[0].name)}</b> — ${fmt(list[0].score)}점`:`총점 <b>${fmt(list[0].score)}</b>점`;
-  let h='<table><thead><tr><th class="l">순위</th><th class="l">플레이어</th><th>총점</th><th>명중/발사</th><th>명중률</th><th>헤드샷</th><th>최대 연속</th>'+TIERS.map(T=>`<th style="color:${T.color}">${T.name}</th>`).join('')+'</tr></thead><tbody>';
-  list.forEach((r,i)=>{
-    const acc=r.fired?Math.round(r.hits/r.fired*100):0;
-    h+=`<tr class="${r.id===myId?'me':''}"><td class="l"><span class="medal m${i+1}">${i+1}</span></td><td class="l"><span class="dot" style="background:${match.color.get(r.id)||'#888'}"></span>${esc(r.name)}${r.id===myId?' <span class="mute">(나)</span>':''}${r.bot?' <span class="mute">BOT</span>':''}${r.dc?' <span style="color:#f87171">끊김</span>':''}</td><td><b>${fmt(r.score)}</b></td><td>${r.hits}/${r.fired}</td><td>${acc}%</td><td>${r.heads}</td><td>${r.best}</td>${r.th.map(n=>`<td>${n}</td>`).join('')}</tr>`;
-  });
-  $('#resTable').innerHTML=h+'</tbody></table>';
+  $('#resTable').innerHTML=resultTableHtml(list);
   renderBoard('boardRes');
-  let b='';
-  if(net.role==='host')b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rLobby">대기실로 (다시 대결)</button>`;
-  else if(net.role==='client')b=`<span class="mute" style="margin-right:auto">호스트가 대기실로 돌아가면 자동으로 이동합니다.</span><button class="btn" id="rMenu">나가기</button>`;
-  else b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rAgain">다시 하기</button>`;
-  $('#resBtns').innerHTML=b;
-  $('#rMenu').onclick=goMenu;
-  if($('#rLobby'))$('#rLobby').onclick=()=>{$('#results').classList.add('hidden');cleanupMatch();
-    lobby.players=lobby.players.filter(p=>p.bot||p.id==='H'||net.conns.has(p.id));
-    if(lobby.players.length>lobby.mode)lobby.mode=lobby.players.length;
-    broadcastLobby();show('#lobby');renderLobby()};
-  if($('#rAgain'))$('#rAgain').onclick=()=>{$('#results').classList.add('hidden');startSolo()};
+  bindResultButtons(list,multi);
   if(multi){
     const colors=new Map(match.color);
     const openRes=()=>$('#results').classList.remove('hidden');
-    $('#resBtns').insertAdjacentHTML('afterbegin','<button class="btn" id="rEnding">엔딩 다시 보기</button>');
     $('#rEnding').onclick=()=>{$('#results').classList.add('hidden');playEnding(list,colors,openRes)};
     playEnding(list,colors,openRes);
   }else $('#results').classList.remove('hidden');
 }
+// 이 브라우저 기록(사람만) + 온라인 전체 랭킹(각자 자기 점수만, 봇 제외, 1·2·3분 경기만)
+function saveRecords(list){
+  const recs=store.get(STORE_RECORDS,[]);
+  const mode=matchModeLabel(),now=Date.now();
+  for(const r of list)if(!r.bot)recs.push({n:r.name,s:r.score,h:r.hits,f:r.fired,m:mode,d:now});
+  while(recs.length>LOCAL_RECORDS_MAX)recs.shift();
+  store.set(STORE_RECORDS,recs);
+  const mine=list.find(r=>r.id===myId);
+  if(sb&&mine&&!mine.bot&&ONLINE_DURATIONS.includes(match.dur))
+    submitScore(mine,mode,match.players.length,match.dur).then(()=>{renderBoard('boardRes');renderBoard('boardMenu')});
+}
+function resultTableHtml(list){
+  const head=[{label:'순위',l:1},{label:'플레이어',l:1},'총점','명중/발사','명중률','헤드샷','최대 연속',...TIERS.map(T=>({label:T.name,color:T.color}))];
+  const rows=list.map((r,i)=>{
+    const tags=(r.id===myId?' <span class="mute">(나)</span>':'')+(r.bot?' <span class="mute">BOT</span>':'')+(r.dc?' <span style="color:#f87171">끊김</span>':'');
+    return `<tr class="${r.id===myId?'me':''}">`+rankCell(i)+
+      `<td class="l"><span class="dot" style="background:${match.color.get(r.id)||'#888'}"></span>${esc(r.name)}${tags}</td>`+
+      `<td><b>${fmt(r.score)}</b></td><td>${r.hits}/${r.fired}</td><td>${accPct(r.hits,r.fired)}%</td><td>${r.heads}</td><td>${r.best}</td>`+
+      r.th.map(n=>`<td>${n}</td>`).join('')+'</tr>';
+  });
+  return tableHtml(head,rows);
+}
+// 결과 창 버튼: 호스트(메인/대기실로) · 참가자(나가기) · 혼자(메인/다시 하기), 여럿이면 [엔딩 다시 보기] 추가
+function bindResultButtons(list,multi){
+  let b;
+  if(net.role==='host')b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rLobby">대기실로 (다시 대결)</button>`;
+  else if(net.role==='client')b=`<span class="mute" style="margin-right:auto">호스트가 대기실로 돌아가면 자동으로 이동합니다.</span><button class="btn" id="rMenu">나가기</button>`;
+  else b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rAgain">다시 하기</button>`;
+  if(multi)b='<button class="btn" id="rEnding">엔딩 다시 보기</button>'+b;
+  $('#resBtns').innerHTML=b;
+  $('#rMenu').onclick=goMenu;
+  if($('#rLobby'))$('#rLobby').onclick=backToLobby;
+  if($('#rAgain'))$('#rAgain').onclick=()=>{$('#results').classList.add('hidden');startSolo()};
+}
+// 호스트: 결과 창 → 대기실 (나간 사람은 빼고, 봇은 그대로)
+function backToLobby(){
+  $('#results').classList.add('hidden');cleanupMatch();
+  lobby.players=lobby.players.filter(p=>p.bot||p.id==='H'||net.conns.has(p.id));
+  if(lobby.players.length>lobby.mode)lobby.mode=lobby.players.length;
+  broadcastLobby();show('#lobby');renderLobby();
+}
+
 const boardTab={boardMenu:'total',boardRes:'total'};
+const boardSeq={}; // 랭킹 표마다 마지막 요청 번호 (늦게 도착한 옛 응답 무시)
+const msgHtml=s=>`<p class="mute" style="margin:6px 0">${s}</p>`;
 // arr 항목 형식 — total: {n,tot,g,best,h,f} / best: {n,s,h,f,m,d}
 function boardTable(tab,arr,online){
-  if(!arr.length)return `<p class="mute" style="margin:6px 0">${online?'아직 온라인 기록이 없습니다. 첫 기록의 주인공이 되어 보세요!':'아직 기록이 없습니다. 게임을 플레이하면 순위가 기록됩니다.'}</p>`;
+  if(!arr.length)return msgHtml(online?'아직 온라인 기록이 없습니다. 첫 기록의 주인공이 되어 보세요!':'아직 기록이 없습니다. 게임을 플레이하면 순위가 기록됩니다.');
   const me=myName(),num=v=>Number(v)||0;
   if(tab==='total')
-    return '<table><thead><tr><th class="l">순위</th><th class="l">닉네임</th><th>누적 총점</th><th>경기 수</th><th>최고 점수</th><th>평균</th><th>명중률</th></tr></thead><tbody>'+
-      arr.map((a,i)=>`<tr class="${a.n===me?'me':''}"><td class="l"><span class="medal m${i+1}">${i+1}</span></td><td class="l">${esc(a.n)}</td><td><b>${fmt(num(a.tot))}</b></td><td>${num(a.g)}</td><td>${fmt(num(a.best))}</td><td>${fmt(num(a.tot)/Math.max(1,num(a.g)))}</td><td>${num(a.f)?Math.round(num(a.h)/num(a.f)*100):0}%</td></tr>`).join('')+'</tbody></table>';
-  return '<table><thead><tr><th class="l">순위</th><th class="l">닉네임</th><th>점수</th><th>명중률</th><th class="l">모드</th><th>날짜</th></tr></thead><tbody>'+
-    arr.map((r,i)=>{const dt=new Date(r.d);return`<tr class="${r.n===me?'me':''}"><td class="l"><span class="medal m${i+1}">${i+1}</span></td><td class="l">${esc(r.n)}</td><td><b>${fmt(num(r.s))}</b></td><td>${num(r.f)?Math.round(num(r.h)/num(r.f)*100):0}%</td><td class="l">${esc(r.m||'')}</td><td>${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}</td></tr>`}).join('')+'</tbody></table>';
+    return tableHtml([{label:'순위',l:1},{label:'닉네임',l:1},'누적 총점','경기 수','최고 점수','평균','명중률'],arr.map((a,i)=>
+      `<tr class="${a.n===me?'me':''}">`+rankCell(i)+`<td class="l">${esc(a.n)}</td><td><b>${fmt(num(a.tot))}</b></td><td>${num(a.g)}</td>`+
+      `<td>${fmt(num(a.best))}</td><td>${fmt(num(a.tot)/Math.max(1,num(a.g)))}</td><td>${accPct(num(a.h),num(a.f))}%</td></tr>`));
+  return tableHtml([{label:'순위',l:1},{label:'닉네임',l:1},'점수','명중률',{label:'모드',l:1},'날짜'],arr.map((r,i)=>
+    `<tr class="${r.n===me?'me':''}">`+rankCell(i)+`<td class="l">${esc(r.n)}</td><td><b>${fmt(num(r.s))}</b></td>`+
+    `<td>${accPct(num(r.h),num(r.f))}%</td><td class="l">${esc(r.m||'')}</td><td>${fmtDate(r.d)}</td></tr>`));
 }
 function renderBoard(elId){
   const el=document.getElementById(elId),tab=boardTab[elId];
   $$(`[data-board="${elId}"] [data-tab]`).forEach(b=>b.classList.toggle('sel',b.dataset.tab===tab));
+  const seq=boardSeq[elId]=(boardSeq[elId]||0)+1;
   if(boardSrc==='global'&&sb){
-    const tok=el._tok=(el._tok||0)+1;
-    if(!gCache[tab])el.innerHTML='<p class="mute" style="margin:6px 0">전체 랭킹 불러오는 중…</p>';
+    if(!gCache[tab])el.innerHTML=msgHtml('전체 랭킹 불러오는 중…');
     fetchGlobal(tab).then(rows=>{
-      if(el._tok!==tok)return;
+      if(boardSeq[elId]!==seq)return;
       const arr=tab==='total'
         ?rows.map(r=>({n:r.name,tot:r.total,g:r.games,best:r.best,h:r.hits,f:r.fired}))
         :rows.map(r=>({n:r.name,s:r.score,h:r.hits,f:r.fired,m:r.mode,d:Date.parse(r.created_at)}));
       el.innerHTML=boardTable(tab,arr,true);
-    }).catch(e=>{if(el._tok!==tok)return;el.innerHTML=`<p class="mute" style="margin:6px 0">전체 랭킹을 불러오지 못했습니다: ${esc(e&&e.message||e)}<br>config.js 와 Supabase SQL 설정을 확인하세요.</p>`});
+    }).catch(e=>{if(boardSeq[elId]!==seq)return;el.innerHTML=msgHtml(`전체 랭킹을 불러오지 못했습니다: ${esc(e&&e.message||e)}<br>config.js 와 Supabase SQL 설정을 확인하세요.`)});
     return;
   }
-  el._tok=(el._tok||0)+1;
-  const recs=store.get('sd_records_v1',[]);
-  let arr;
-  if(tab==='total'){
-    const m=new Map();
-    for(const r of recs){const a=m.get(r.n)||{n:r.n,tot:0,g:0,best:0,h:0,f:0};a.tot+=r.s;a.g++;a.best=Math.max(a.best,r.s);a.h+=r.h;a.f+=r.f;m.set(r.n,a)}
-    arr=[...m.values()].sort((a,b)=>b.tot-a.tot).slice(0,15);
-  }else arr=recs.slice().sort((a,b)=>b.s-a.s).slice(0,15);
-  el.innerHTML=boardTable(tab,arr,false);
+  el.innerHTML=boardTable(tab,localBoard(tab),false);
+}
+// 이 브라우저 기록으로 만든 랭킹: total = 닉네임별 합계, best = 한 판 점수
+function localBoard(tab){
+  const recs=store.get(STORE_RECORDS,[]);
+  if(tab!=='total')return recs.slice().sort((a,b)=>b.s-a.s).slice(0,BOARD_TOP_N);
+  const m=new Map();
+  for(const r of recs){const a=m.get(r.n)||{n:r.n,tot:0,g:0,best:0,h:0,f:0};a.tot+=r.s;a.g++;a.best=Math.max(a.best,r.s);a.h+=r.h;a.f+=r.f;m.set(r.n,a)}
+  return [...m.values()].sort((a,b)=>b.tot-a.tot).slice(0,BOARD_TOP_N);
 }
 
 /* =================== 온라인 (Supabase): 전체 랭킹 + 실시간 열린 방 목록 ===================
@@ -1189,17 +1243,17 @@ try{
 let boardSrc=sb?'global':'local';
 const gCache={};
 async function fetchGlobal(tab){
-  const c=gCache[tab];if(c&&Date.now()-c.t<15000)return c.rows;
+  const c=gCache[tab];if(c&&Date.now()-c.t<GLOBAL_CACHE_MS)return c.rows;
   const q=tab==='total'
-    ?sb.from('leaderboard_total').select('name,total,games,best,hits,fired').order('total',{ascending:false}).limit(15)
-    :sb.from('scores').select('name,score,hits,fired,mode,created_at').order('score',{ascending:false}).limit(15);
+    ?sb.from('leaderboard_total').select('name,total,games,best,hits,fired').order('total',{ascending:false}).limit(BOARD_TOP_N)
+    :sb.from('scores').select('name,score,hits,fired,mode,created_at').order('score',{ascending:false}).limit(BOARD_TOP_N);
   const {data,error}=await q;if(error)throw error;
   gCache[tab]={t:Date.now(),rows:data||[]};return data||[];
 }
 async function submitScore(r,mode,players,dur){
   try{
     const {error}=await sb.from('scores').insert({
-      name:String(r.name||'플레이어').slice(0,12)||'플레이어',score:clamp(Math.round(r.score)||0,0,300000),
+      name:String(r.name||'플레이어').slice(0,NAME_MAX)||'플레이어',score:clamp(Math.round(r.score)||0,0,300000),
       hits:clamp(r.hits|0,0,1000),fired:clamp(r.fired|0,0,1000),heads:clamp(r.heads|0,0,1000),best_streak:clamp(r.best|0,0,1000),
       mode:String(mode).slice(0,20),duration:dur,players:clamp(players|0,1,4)});
     if(error)throw error;
@@ -1214,7 +1268,7 @@ function initLobbyRT(){
     const st=ch.presenceState(),rooms=[];
     for(const k in st)for(const p of st[k]){
       if(!p||typeof p.code!=='string'||!/^[A-Z0-9]{5}$/.test(p.code))continue;
-      rooms.push({code:p.code,host:String(p.host||'?').slice(0,12),count:clamp(+p.count||0,0,4),max:clamp(+p.max||2,1,4),dur:[60,120,180].includes(+p.dur)?+p.dur:180,view:p.view==='shared'?'shared':'split',playing:!!p.playing,at:+p.at||0});
+      rooms.push({code:p.code,host:String(p.host||'?').slice(0,NAME_MAX),count:clamp(+p.count||0,0,MAX_PLAYERS),max:clamp(+p.max||2,1,MAX_PLAYERS),dur:ONLINE_DURATIONS.includes(+p.dur)?+p.dur:180,view:p.view==='shared'?'shared':'split',playing:!!p.playing,at:+p.at||0});
     }
     lobbyRT.rooms=rooms;renderRooms();
   });
@@ -1306,7 +1360,7 @@ function playEnding(list,colors,onDone){
     // 꽃가루
     for(const p of ending.conf){p.y+=p.v*0.016;p.r+=p.vr*0.016;if(p.y>1.05){p.y=-0.05;p.x=Math.random()}
       x.save();x.translate(p.x*W,p.y*H);x.rotate(p.r);x.fillStyle=p.c;x.fillRect(-5*s,-3*s,10*s,6*s);x.restore()}
-    if(T>9)skip();
+    if(T>ENDING_SEC)skip();
   };
   ending.raf=requestAnimationFrame(draw);
 }
@@ -1353,13 +1407,12 @@ function goMenu(){
   resetNet();cleanupMatch();
   $('#results').classList.add('hidden');show('#menu');renderBoard('boardMenu');
 }
-function updateSoundBtn(){} // 효과음은 항상 켜짐 (토글 없음)
 
 /* =================== wiring =================== */
 function init(){
   BG=makeBG();
   const nameIn=$('#nameIn');nameIn.value=settings.name;
-  nameIn.addEventListener('input',()=>{settings.name=nameIn.value.slice(0,12);saveSettings()});
+  nameIn.addEventListener('input',()=>{settings.name=nameIn.value.slice(0,NAME_MAX);saveSettings()});
   $('#btnHost').onclick=()=>{ac();createRoom()};
   // 혼자 연습: 조작법 팝업 → [확인]을 눌러야 게임 시작
   const intro=$('#soloIntro'),closeIntro=()=>intro.classList.add('hidden');
@@ -1375,7 +1428,6 @@ function init(){
   $('#btnLeave').onclick=goMenu;
   $$('[data-mode]').forEach(b=>b.onclick=()=>{const m=+b.dataset.mode;if(m<lobby.players.length)return;lobby.mode=m;broadcastLobby();renderLobby()});
   $$('[data-view]').forEach(b=>b.onclick=()=>{lobby.view=b.dataset.view;broadcastLobby();renderLobby()});
-  $$('[data-dur]').forEach(b=>b.onclick=()=>{lobby.dur=+b.dataset.dur;broadcastLobby();renderLobby()});
   $$('[data-bot]').forEach(b=>b.onclick=()=>addBot(b.dataset.bot));
   $('#slots').addEventListener('click',e=>{const id=e.target.dataset&&e.target.dataset.rm;if(id){lobby.players=lobby.players.filter(p=>p.id!==id);broadcastLobby();renderLobby()}});
   $('#btnStart').onclick=hostStart;
@@ -1383,8 +1435,8 @@ function init(){
   $('#btnCopyLink').onclick=()=>{const u=inviteUrl(net.code);if(u)copyText(u,'초대 링크가 복사되었습니다: '+u);else if(net.code)copyText(net.code,'방 코드가 복사되었습니다: '+net.code)};
   $('#shareUrl').addEventListener('input',e=>{settings.shareUrl=e.target.value.trim();saveSettings();renderInvite()});
   $('#btnQuickJoin').onclick=()=>{ac();if(!(settings.name||'').trim()){nameIn.focus();menuMsg('닉네임을 입력한 뒤 [바로 참가]를 누르세요.');return}joinRoom()};
-  const q=(new URLSearchParams(location.search).get('join')||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5);
-  if(q.length===5){
+  const q=(new URLSearchParams(location.search).get('join')||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,CODE_LEN);
+  if(q.length===CODE_LEN){
     $('#codeIn').value=q;showBanner(q);
     if((settings.name||'').trim())setTimeout(()=>$('#btnQuickJoin').focus(),50);else setTimeout(()=>nameIn.focus(),50);
   }
