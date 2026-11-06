@@ -560,7 +560,7 @@ class Pane{
     x.setTransform(sc,0,0,sc,ox,oy);
     x.drawImage(BG,0,0,WORLD_W,WORLD_H);
     if(v&&t>=0){
-      const act=activeTargets(match.sched,info.dead||v.dead,Math.min(t,match.dur)).sort((a,b)=>a.y-b.y);
+      const act=activeTargets(info.sched,info.dead||v.dead,Math.min(t,info.dur)).sort((a,b)=>a.y-b.y);
       for(const o of act)drawTarget(x,o);
       const allShots=info.others?v.shots.concat(...info.others.map(o=>o.v.shots)):v.shots;
       for(const s of allShots){
@@ -667,8 +667,8 @@ class Pane{
     if(v.dc){x.fillStyle='rgba(0,0,0,.6)';x.fillRect(0,H/2-26*u,W,52*u);x.fillStyle='#f87171';x.font=`800 ${Math.round(20*u)}px "Segoe UI",sans-serif`;x.fillText('연결 끊김',W/2,H/2)}
     if(t<0){x.fillStyle='rgba(0,0,0,.45)';x.fillRect(0,0,W,H);x.fillStyle='#fff';x.font=`900 ${Math.round(90*u)}px "Segoe UI",sans-serif`;x.fillText(Math.ceil(-t),W/2,H/2);
       x.font=`700 ${Math.round(15*u)}px "Segoe UI","Malgun Gothic",sans-serif`;x.fillStyle='#cbd5e1';x.fillText('준비하세요',W/2,H/2+64*u)}
-    else if(t>=match.dur){x.fillStyle='rgba(0,0,0,.5)';x.fillRect(0,0,W,H);x.fillStyle='#ffd166';x.font=`900 ${Math.round(48*u)}px "Segoe UI",sans-serif`;x.fillText('TIME UP',W/2,H/2)}
-    if(info.me&&!info.locked&&!match.ended){
+    else if(t>=info.dur){x.fillStyle='rgba(0,0,0,.5)';x.fillRect(0,0,W,H);x.fillStyle='#ffd166';x.font=`900 ${Math.round(48*u)}px "Segoe UI",sans-serif`;x.fillText('TIME UP',W/2,H/2)}
+    if(info.me&&!info.locked&&!info.ended){
       x.fillStyle='rgba(0,0,0,.7)';x.fillRect(0,H-pad-80*u,W,36*u);x.fillStyle='#f59e0b';x.font=`800 ${Math.round(15*u)}px "Segoe UI","Malgun Gothic",sans-serif`;
       x.fillText('클릭하면 마우스가 내 화면에 고정되고 조준을 시작합니다 (Esc: 해제)',W/2,H-pad-62*u)}
   }
@@ -1023,31 +1023,52 @@ function updateTopBar(t){
   $('#ranks').innerHTML=list.map((p,i)=>`<div class="chip" style="--pc:${match.color.get(p.id)}"><span class="r">${i+1}위</span><span>${esc(p.name)}${p.id===myId?' (나)':''}</span><span class="s">${fmt(p.sc)}</span>${i>0?`<span class="mute" style="font-size:12px">-${fmt(list[0].sc-p.sc)}</span>`:''}</div>`).join('');
 }
 
+const MAX_FRAME_DT=0.05; // 프레임이 밀려도 봇·보간이 한 번에 0.05초 넘게 움직이지 않게
+// 매 프레임: 카운트다운 → (공유 화면) 맞힌 표적 합치기 → 봇 → 네트워크 전송 → 그리기 → 남의 발사음 → 상단 순위 → 시간 종료
 function frame(now){
   requestAnimationFrame(frame);
-  const dt=Math.min(0.05,(now-lastNow)/1000);lastNow=now;
+  const dt=Math.min(MAX_FRAME_DT,(now-lastNow)/1000);lastNow=now;
   if(!match)return;
   const t=(now-match.startPerf)/1000;
-  if(t<0){const n=Math.ceil(-t);if(n!==match.beeped){match.beeped=n;if(n<=3)sfxBeep(false)}}
-  else if(match.beeped!==0){match.beeped=0;sfxBeep(true)}
+  tickCountdown(t);
   if(match.shared)sharedDead();
   if(t>=0&&t<match.dur)for(const b of match.bots)b.update(t,dt);
-  if(net.online&&!match.ended&&now-match.lastSend>NET_SEND_MS){
-    match.lastSend=now;
-    if(net.role==='client')sendHost({t:'state',s:pack(myId,match.own,t)});
-    else if(net.role==='host')broadcast({t:'states',list:hostStates(t)});
-  }
-  const locked=document.pointerLockElement===match.ownCanvas||match.noLock;
+  sendNetState(now,t);
   const views=new Map(match.order.map(id=>[id,viewFor(id,t,dt)]));
-  const infoOf=id=>({name:match.names.get(id),color:match.color.get(id),rank:match.players.length>1?match.ranks.get(id):0,me:id===myId,locked});
+  renderPanes(views,t);
+  playOthersShots(views,t);
+  if(now-match.lastBar>TOPBAR_MS){match.lastBar=now;updateTopBar(t)}
+  if(t>=match.dur&&!match.ended)onTimeUp(t);
+}
+// 3·2·1 삑, 시작할 때 높은 삑
+function tickCountdown(t){
+  if(t<0){const n=Math.ceil(-t);if(n!==match.beeped){match.beeped=n;if(n<=3)sfxBeep(false)}}
+  else if(match.beeped!==0){match.beeped=0;sfxBeep(true)}
+}
+// 참가자는 내 상태를 호스트에게, 호스트는 모두의 상태를 모두에게 (약 15회/초)
+function sendNetState(now,t){
+  if(!net.online||match.ended||now-match.lastSend<=NET_SEND_MS)return;
+  match.lastSend=now;
+  if(net.role==='client')sendHost({t:'state',s:pack(myId,match.own,t)});
+  else if(net.role==='host')broadcast({t:'states',list:hostStates(t)});
+}
+// 칸마다 그릴 정보. 렌더러(Pane)는 전역 match 대신 이 정보만 본다
+function paneInfo(id,locked){
+  return{name:match.names.get(id),color:match.color.get(id),rank:match.players.length>1?match.ranks.get(id):0,me:id===myId,locked,
+    sched:match.sched,dur:match.dur,ended:match.ended};
+}
+function renderPanes(views,t){
+  const locked=document.pointerLockElement===match.ownCanvas||match.noLock;
   if(match.shared){
-    const info=infoOf(myId);info.dead=match.gd;info.shared=true;
+    const info=paneInfo(myId,locked);info.dead=match.gd;info.shared=true;
     info.others=match.order.filter(id=>id!==myId&&views.get(id)).map((id,idx)=>({v:views.get(id),name:match.names.get(id),color:match.color.get(id),idx}));
     match.panes.get(myId).render(views.get(myId),t,info);
   }else{
-    for(const id of match.paneIds)match.panes.get(id).render(views.get(id),t,infoOf(id));
+    for(const id of match.paneIds)match.panes.get(id).render(views.get(id),t,paneInfo(id,locked));
   }
-  // 다른 플레이어의 발사음 (작게, 공유 화면에선 조준 위치 쪽으로 패닝)
+}
+// 다른 플레이어의 발사음 (작게, 공유 화면에선 조준 위치 쪽으로 패닝)
+function playOthersShots(views,t){
   match.order.forEach((id,i)=>{
     const v=views.get(id);
     if(id===myId||!v||!v.shots.length)return;
@@ -1056,8 +1077,6 @@ function frame(now){
       const pan=match.shared?(v.ax/WORLD_W-0.5)*1.4:((i%2===1)?0.6:-0.6);
       if(prev!==undefined&&t-last.t<0.6)sfxShot(match.shared?0.3:0.22,pan)}
   });
-  if(now-match.lastBar>TOPBAR_MS){match.lastBar=now;updateTopBar(t)}
-  if(t>=match.dur&&!match.ended)onTimeUp(t);
 }
 function hostStates(t){
   const out=[];
