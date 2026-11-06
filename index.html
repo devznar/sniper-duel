@@ -281,6 +281,7 @@ const $$=s=>Array.from(document.querySelectorAll(s));
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
 const fmt=n=>Math.round(n).toLocaleString('ko-KR');
+const accPct=(hits,fired)=>fired?Math.round(hits/fired*100):0; // 명중률(%)
 const store={
   get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
@@ -656,7 +657,7 @@ class Pane{
     x.fillStyle='rgba(0,0,0,.6)';x.fillRect(W-pad-sw,pad,sw,38*u);x.fillStyle='#ffd166';x.fillText(st,W-pad-11*u,pad+19*u);
     // stats
     x.font=`600 ${Math.round(13*u)}px "Segoe UI","Malgun Gothic",sans-serif`;x.textAlign='left';
-    const acc=v.f?Math.round(v.h/v.f*100):0;
+    const acc=accPct(v.h,v.f);
     const s2=`명중 ${v.h}/${v.f} · ${acc}% · 헤드 ${v.hd} · 연속 ${v.st}`;
     const s2w=x.measureText(s2).width+20*u;
     x.fillStyle='rgba(0,0,0,.6)';x.fillRect(pad,H-pad-26*u,s2w,26*u);x.fillStyle='#dfe7f1';x.fillText(s2,pad+10*u,H-pad-13*u);
@@ -1117,87 +1118,114 @@ function localResults(){
 }
 
 /* =================== results & leaderboard =================== */
+// 표 HTML 공통: 머리글은 문자열 또는 {label, l:왼쪽 정렬, color}
+function tableHtml(head,rows){
+  const th=h=>typeof h==='string'?`<th>${h}</th>`:`<th${h.l?' class="l"':''}${h.color?` style="color:${h.color}"`:''}>${h.label}</th>`;
+  return '<table><thead><tr>'+head.map(th).join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table>';
+}
+const rankCell=i=>`<td class="l"><span class="medal m${i+1}">${i+1}</span></td>`;
+const fmtDate=ms=>{const d=new Date(ms);return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`};
+function matchModeLabel(){return (match.players.length===1?'솔로':match.players.length+'인')+' '+(match.dur/60)+'분'}
+
 function showResults(list){
   if(!match||match.done)return;match.done=true;
   clearTimeout(match.finalTimer);clearTimeout(match.clientTimer);
   list=list.slice().sort((a,b)=>b.score-a.score||b.hits-a.hits);
-  if(!match.saved){
-    match.saved=true;
-    const recs=store.get(STORE_RECORDS,[]);
-    const mode=(match.players.length===1?'솔로':match.players.length+'인')+' '+(match.dur/60)+'분';
-    const now=Date.now();
-    for(const r of list)if(!r.bot)recs.push({n:r.name,s:r.score,h:r.hits,f:r.fired,m:mode,d:now});
-    while(recs.length>LOCAL_RECORDS_MAX)recs.shift();
-    store.set(STORE_RECORDS,recs);
-    // 온라인 전체 랭킹: 각자 자기 점수만 등록 (봇 제외, 1·2·3분 경기만)
-    const mine=list.find(r=>r.id===myId);
-    if(sb&&mine&&!mine.bot&&ONLINE_DURATIONS.includes(match.dur))
-      submitScore(mine,mode,match.players.length,match.dur).then(()=>{renderBoard('boardRes');renderBoard('boardMenu')});
-  }
+  if(!match.saved){match.saved=true;saveRecords(list)}
   const multi=list.length>1;
   $('#resTitle').textContent=multi?'경기 결과':'연습 결과';
   $('#resWinner').innerHTML=multi?`🏆 우승: <b>${esc(list[0].name)}</b> — ${fmt(list[0].score)}점`:`총점 <b>${fmt(list[0].score)}</b>점`;
-  let h='<table><thead><tr><th class="l">순위</th><th class="l">플레이어</th><th>총점</th><th>명중/발사</th><th>명중률</th><th>헤드샷</th><th>최대 연속</th>'+TIERS.map(T=>`<th style="color:${T.color}">${T.name}</th>`).join('')+'</tr></thead><tbody>';
-  list.forEach((r,i)=>{
-    const acc=r.fired?Math.round(r.hits/r.fired*100):0;
-    h+=`<tr class="${r.id===myId?'me':''}"><td class="l"><span class="medal m${i+1}">${i+1}</span></td><td class="l"><span class="dot" style="background:${match.color.get(r.id)||'#888'}"></span>${esc(r.name)}${r.id===myId?' <span class="mute">(나)</span>':''}${r.bot?' <span class="mute">BOT</span>':''}${r.dc?' <span style="color:#f87171">끊김</span>':''}</td><td><b>${fmt(r.score)}</b></td><td>${r.hits}/${r.fired}</td><td>${acc}%</td><td>${r.heads}</td><td>${r.best}</td>${r.th.map(n=>`<td>${n}</td>`).join('')}</tr>`;
-  });
-  $('#resTable').innerHTML=h+'</tbody></table>';
+  $('#resTable').innerHTML=resultTableHtml(list);
   renderBoard('boardRes');
-  let b='';
-  if(net.role==='host')b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rLobby">대기실로 (다시 대결)</button>`;
-  else if(net.role==='client')b=`<span class="mute" style="margin-right:auto">호스트가 대기실로 돌아가면 자동으로 이동합니다.</span><button class="btn" id="rMenu">나가기</button>`;
-  else b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rAgain">다시 하기</button>`;
-  $('#resBtns').innerHTML=b;
-  $('#rMenu').onclick=goMenu;
-  if($('#rLobby'))$('#rLobby').onclick=()=>{$('#results').classList.add('hidden');cleanupMatch();
-    lobby.players=lobby.players.filter(p=>p.bot||p.id==='H'||net.conns.has(p.id));
-    if(lobby.players.length>lobby.mode)lobby.mode=lobby.players.length;
-    broadcastLobby();show('#lobby');renderLobby()};
-  if($('#rAgain'))$('#rAgain').onclick=()=>{$('#results').classList.add('hidden');startSolo()};
+  bindResultButtons(list,multi);
   if(multi){
     const colors=new Map(match.color);
     const openRes=()=>$('#results').classList.remove('hidden');
-    $('#resBtns').insertAdjacentHTML('afterbegin','<button class="btn" id="rEnding">엔딩 다시 보기</button>');
     $('#rEnding').onclick=()=>{$('#results').classList.add('hidden');playEnding(list,colors,openRes)};
     playEnding(list,colors,openRes);
   }else $('#results').classList.remove('hidden');
 }
+// 이 브라우저 기록(사람만) + 온라인 전체 랭킹(각자 자기 점수만, 봇 제외, 1·2·3분 경기만)
+function saveRecords(list){
+  const recs=store.get(STORE_RECORDS,[]);
+  const mode=matchModeLabel(),now=Date.now();
+  for(const r of list)if(!r.bot)recs.push({n:r.name,s:r.score,h:r.hits,f:r.fired,m:mode,d:now});
+  while(recs.length>LOCAL_RECORDS_MAX)recs.shift();
+  store.set(STORE_RECORDS,recs);
+  const mine=list.find(r=>r.id===myId);
+  if(sb&&mine&&!mine.bot&&ONLINE_DURATIONS.includes(match.dur))
+    submitScore(mine,mode,match.players.length,match.dur).then(()=>{renderBoard('boardRes');renderBoard('boardMenu')});
+}
+function resultTableHtml(list){
+  const head=[{label:'순위',l:1},{label:'플레이어',l:1},'총점','명중/발사','명중률','헤드샷','최대 연속',...TIERS.map(T=>({label:T.name,color:T.color}))];
+  const rows=list.map((r,i)=>{
+    const tags=(r.id===myId?' <span class="mute">(나)</span>':'')+(r.bot?' <span class="mute">BOT</span>':'')+(r.dc?' <span style="color:#f87171">끊김</span>':'');
+    return `<tr class="${r.id===myId?'me':''}">`+rankCell(i)+
+      `<td class="l"><span class="dot" style="background:${match.color.get(r.id)||'#888'}"></span>${esc(r.name)}${tags}</td>`+
+      `<td><b>${fmt(r.score)}</b></td><td>${r.hits}/${r.fired}</td><td>${accPct(r.hits,r.fired)}%</td><td>${r.heads}</td><td>${r.best}</td>`+
+      r.th.map(n=>`<td>${n}</td>`).join('')+'</tr>';
+  });
+  return tableHtml(head,rows);
+}
+// 결과 창 버튼: 호스트(메인/대기실로) · 참가자(나가기) · 혼자(메인/다시 하기), 여럿이면 [엔딩 다시 보기] 추가
+function bindResultButtons(list,multi){
+  let b;
+  if(net.role==='host')b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rLobby">대기실로 (다시 대결)</button>`;
+  else if(net.role==='client')b=`<span class="mute" style="margin-right:auto">호스트가 대기실로 돌아가면 자동으로 이동합니다.</span><button class="btn" id="rMenu">나가기</button>`;
+  else b=`<button class="btn" id="rMenu">메인으로</button><button class="btn pri" id="rAgain">다시 하기</button>`;
+  if(multi)b='<button class="btn" id="rEnding">엔딩 다시 보기</button>'+b;
+  $('#resBtns').innerHTML=b;
+  $('#rMenu').onclick=goMenu;
+  if($('#rLobby'))$('#rLobby').onclick=backToLobby;
+  if($('#rAgain'))$('#rAgain').onclick=()=>{$('#results').classList.add('hidden');startSolo()};
+}
+// 호스트: 결과 창 → 대기실 (나간 사람은 빼고, 봇은 그대로)
+function backToLobby(){
+  $('#results').classList.add('hidden');cleanupMatch();
+  lobby.players=lobby.players.filter(p=>p.bot||p.id==='H'||net.conns.has(p.id));
+  if(lobby.players.length>lobby.mode)lobby.mode=lobby.players.length;
+  broadcastLobby();show('#lobby');renderLobby();
+}
+
 const boardTab={boardMenu:'total',boardRes:'total'};
+const boardSeq={}; // 랭킹 표마다 마지막 요청 번호 (늦게 도착한 옛 응답 무시)
+const msgHtml=s=>`<p class="mute" style="margin:6px 0">${s}</p>`;
 // arr 항목 형식 — total: {n,tot,g,best,h,f} / best: {n,s,h,f,m,d}
 function boardTable(tab,arr,online){
-  if(!arr.length)return `<p class="mute" style="margin:6px 0">${online?'아직 온라인 기록이 없습니다. 첫 기록의 주인공이 되어 보세요!':'아직 기록이 없습니다. 게임을 플레이하면 순위가 기록됩니다.'}</p>`;
+  if(!arr.length)return msgHtml(online?'아직 온라인 기록이 없습니다. 첫 기록의 주인공이 되어 보세요!':'아직 기록이 없습니다. 게임을 플레이하면 순위가 기록됩니다.');
   const me=myName(),num=v=>Number(v)||0;
   if(tab==='total')
-    return '<table><thead><tr><th class="l">순위</th><th class="l">닉네임</th><th>누적 총점</th><th>경기 수</th><th>최고 점수</th><th>평균</th><th>명중률</th></tr></thead><tbody>'+
-      arr.map((a,i)=>`<tr class="${a.n===me?'me':''}"><td class="l"><span class="medal m${i+1}">${i+1}</span></td><td class="l">${esc(a.n)}</td><td><b>${fmt(num(a.tot))}</b></td><td>${num(a.g)}</td><td>${fmt(num(a.best))}</td><td>${fmt(num(a.tot)/Math.max(1,num(a.g)))}</td><td>${num(a.f)?Math.round(num(a.h)/num(a.f)*100):0}%</td></tr>`).join('')+'</tbody></table>';
-  return '<table><thead><tr><th class="l">순위</th><th class="l">닉네임</th><th>점수</th><th>명중률</th><th class="l">모드</th><th>날짜</th></tr></thead><tbody>'+
-    arr.map((r,i)=>{const dt=new Date(r.d);return`<tr class="${r.n===me?'me':''}"><td class="l"><span class="medal m${i+1}">${i+1}</span></td><td class="l">${esc(r.n)}</td><td><b>${fmt(num(r.s))}</b></td><td>${num(r.f)?Math.round(num(r.h)/num(r.f)*100):0}%</td><td class="l">${esc(r.m||'')}</td><td>${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}</td></tr>`}).join('')+'</tbody></table>';
+    return tableHtml([{label:'순위',l:1},{label:'닉네임',l:1},'누적 총점','경기 수','최고 점수','평균','명중률'],arr.map((a,i)=>
+      `<tr class="${a.n===me?'me':''}">`+rankCell(i)+`<td class="l">${esc(a.n)}</td><td><b>${fmt(num(a.tot))}</b></td><td>${num(a.g)}</td>`+
+      `<td>${fmt(num(a.best))}</td><td>${fmt(num(a.tot)/Math.max(1,num(a.g)))}</td><td>${accPct(num(a.h),num(a.f))}%</td></tr>`));
+  return tableHtml([{label:'순위',l:1},{label:'닉네임',l:1},'점수','명중률',{label:'모드',l:1},'날짜'],arr.map((r,i)=>
+    `<tr class="${r.n===me?'me':''}">`+rankCell(i)+`<td class="l">${esc(r.n)}</td><td><b>${fmt(num(r.s))}</b></td>`+
+    `<td>${accPct(num(r.h),num(r.f))}%</td><td class="l">${esc(r.m||'')}</td><td>${fmtDate(r.d)}</td></tr>`));
 }
 function renderBoard(elId){
   const el=document.getElementById(elId),tab=boardTab[elId];
   $$(`[data-board="${elId}"] [data-tab]`).forEach(b=>b.classList.toggle('sel',b.dataset.tab===tab));
+  const seq=boardSeq[elId]=(boardSeq[elId]||0)+1;
   if(boardSrc==='global'&&sb){
-    const tok=el._tok=(el._tok||0)+1;
-    if(!gCache[tab])el.innerHTML='<p class="mute" style="margin:6px 0">전체 랭킹 불러오는 중…</p>';
+    if(!gCache[tab])el.innerHTML=msgHtml('전체 랭킹 불러오는 중…');
     fetchGlobal(tab).then(rows=>{
-      if(el._tok!==tok)return;
+      if(boardSeq[elId]!==seq)return;
       const arr=tab==='total'
         ?rows.map(r=>({n:r.name,tot:r.total,g:r.games,best:r.best,h:r.hits,f:r.fired}))
         :rows.map(r=>({n:r.name,s:r.score,h:r.hits,f:r.fired,m:r.mode,d:Date.parse(r.created_at)}));
       el.innerHTML=boardTable(tab,arr,true);
-    }).catch(e=>{if(el._tok!==tok)return;el.innerHTML=`<p class="mute" style="margin:6px 0">전체 랭킹을 불러오지 못했습니다: ${esc(e&&e.message||e)}<br>config.js 와 Supabase SQL 설정을 확인하세요.</p>`});
+    }).catch(e=>{if(boardSeq[elId]!==seq)return;el.innerHTML=msgHtml(`전체 랭킹을 불러오지 못했습니다: ${esc(e&&e.message||e)}<br>config.js 와 Supabase SQL 설정을 확인하세요.`)});
     return;
   }
-  el._tok=(el._tok||0)+1;
+  el.innerHTML=boardTable(tab,localBoard(tab),false);
+}
+// 이 브라우저 기록으로 만든 랭킹: total = 닉네임별 합계, best = 한 판 점수
+function localBoard(tab){
   const recs=store.get(STORE_RECORDS,[]);
-  let arr;
-  if(tab==='total'){
-    const m=new Map();
-    for(const r of recs){const a=m.get(r.n)||{n:r.n,tot:0,g:0,best:0,h:0,f:0};a.tot+=r.s;a.g++;a.best=Math.max(a.best,r.s);a.h+=r.h;a.f+=r.f;m.set(r.n,a)}
-    arr=[...m.values()].sort((a,b)=>b.tot-a.tot).slice(0,BOARD_TOP_N);
-  }else arr=recs.slice().sort((a,b)=>b.s-a.s).slice(0,BOARD_TOP_N);
-  el.innerHTML=boardTable(tab,arr,false);
+  if(tab!=='total')return recs.slice().sort((a,b)=>b.s-a.s).slice(0,BOARD_TOP_N);
+  const m=new Map();
+  for(const r of recs){const a=m.get(r.n)||{n:r.n,tot:0,g:0,best:0,h:0,f:0};a.tot+=r.s;a.g++;a.best=Math.max(a.best,r.s);a.h+=r.h;a.f+=r.f;m.set(r.n,a)}
+  return [...m.values()].sort((a,b)=>b.tot-a.tot).slice(0,BOARD_TOP_N);
 }
 
 /* =================== 온라인 (Supabase): 전체 랭킹 + 실시간 열린 방 목록 ===================
