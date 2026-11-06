@@ -3,6 +3,15 @@
 git 기록은 보지 않고 현재 작업 트리의 코드만 읽고 정리했습니다. 고친 곳은 없습니다.
 줄번호는 리팩토링 전 커밋(`cb3c3b7`)의 파일 기준이고, 심각도가 높은 것부터 적었습니다.
 
+> **리팩토링(`refactor/index-cleanup`)으로 정리된 항목** (동작은 바꾸지 않는 범위)
+> - 죽은 코드: `downloadGame`/`PAGE_SRC`, `[data-dur]` 처리, `updateSoundBtn`, 쓰지 않는 `settings.auto/sound/soloDur`, 무시되던 인자(`bindOwnCanvas`→`bindGridInput`, `cycleZoom`)
+> - 명중 범위 숫자가 세 곳에 따로 적혀 있던 것 → `HITBOX` 상수 하나
+> - `800`/`450` 같은 매직 넘버 → 이름 있는 상수, `blankRemoteState()`
+> - `Pane.render`/`hud`가 전역 `match`를 읽던 것 → `paneInfo()`로 넘겨받음
+> - 한 줄에 몰려 있던 결과표·랭킹표 HTML 생성 → 작은 함수로 분리
+>
+> 아래 표의 **높음·중간** 항목은 동작(버그·보안)을 바꿔야 고칠 수 있어서 이번 리팩토링 범위에서 뺐습니다.
+
 ## 높음: 게임이 멈추거나 랭킹·승패를 믿을 수 없게 됨
 
 | 줄번호 | 무엇이 이상한지 | 그대로 두면 생길 일 |
