@@ -1,0 +1,2 @@
+# 골든 스냅샷은 줄바꿈까지 그대로 비교하므로 OS와 상관없이 LF로 고정
+tests/__snapshots__/** text eol=lf
